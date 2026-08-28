@@ -14,15 +14,15 @@ Always **read the actual reason before changing flags**. Get it from:
 | `Resources` | Waiting for enough free GPUs/CPUs/RAM to fit. | Normal under load. Smaller request = sooner start. |
 | `QOSMaxGRESPerUser` / `QOSMaxGRESPerUserLimit` | You're at your per-user GPU cap (4 normal / 2 undergrad / 8 scavenger). | Let your running jobs finish, or cancel one. Not routable around. |
 | `QOSMaxJobsPerUserLimit` / `AssocMaxSubmitJobLimit` | Too many submitted jobs. | Wait for some to drain, or cancel. |
-| `ReqNodeNotAvail` / `Reserved` | Node drained or held by a reservation. | Pick another node or wait; check `sinfo -R` and `scontrol show res`. |
+| `ReqNodeNotAvail` / `Reserved` | Node drained, or capacity held by a reservation (part of the cluster is reserved for a course on a recurring schedule). | Check `sinfo -R` and `scontrol show res` — an `State=ACTIVE` reservation shows what's held and until when. Wait it out, or size the job to fit what's left. Not an error, and not routable around. |
 | `PartitionTimeLimit` | `--time` exceeds the partition/QoS cap. | Lower `--time` (or use a QoS/partition with a longer cap). |
 
 ## Rejected at submit time
 
 | Message | Cause | Fix |
 |---|---|---|
-| `Invalid account or account/partition combination` | User not onboarded (no association), or `-p`/account mismatch. | If `sacctmgr show assoc where user=$USER` is empty → ask a sysadmin to `sacctmgr add user`. Otherwise check the partition name. |
-| `Invalid qos specification` | Requested a QoS the user doesn't hold. | Drop `--qos`, or (for `expedite`) get a sysadmin grant first. |
+| `Invalid account or account/partition combination` | User not onboarded (no association), or `-p`/account mismatch. | If `sacctmgr show assoc where user=$USER` is empty → they need a cluster account: send them to the Sprocket portal (`/no-account` once signed in). Otherwise check the partition name. |
+| `Invalid qos specification` | Requested a QoS the user doesn't hold. | Drop `--qos` and proceed on the default. For `expedite`, it must be granted first — request it at the portal's `/requests`. |
 | `Interactive sessions are limited to the 'debug' partition ...` | An interactive `salloc`/`srun` explicitly asked for a non-`debug` partition (e.g. `-p main`). `job_submit.lua` rejects it. | Drop `-p` (interactive auto-routes to `debug`), or — if the work needs > 1 h — make it an `sbatch` job on `main`. |
 | `scavenger is a batch/best-effort tier and cannot run interactively ...` | An interactive `salloc --qos=scavenger`. | Submit it as `sbatch --qos=scavenger` instead. |
 | `Requested time limit ... exceeds ... limit` | `--time` over the QoS/partition cap (batch). | Lower it, or move to a higher-cap QoS. |
@@ -47,10 +47,16 @@ Always **read the actual reason before changing flags**. Get it from:
 
 ## Useful diagnostics
 
+> **Reading efficiency after the fact:** use the text `sacct --format=...` form, not `sacct --json`.
+> The JSON output omits the memory-used fields, so `MaxRSS` comes back empty and an efficiency check
+> silently reports nothing rather than failing loudly.
+
 ```bash
 scontrol show job <id>                 # full state + Reason
 sacct -j <id> -l                       # everything accounting recorded
-seff <id>                              # CPU/mem/GPU efficiency (if installed) — catches over-requests
+sacct -j <id> --format=JobID,Elapsed,Timelimit,ReqTRES%40,MaxRSS   # over-request check.
+                                       #   MaxRSS is on the .batch step: do NOT add -X.
+                                       #   (`seff` is NOT installed on this cluster.)
 sinfo -R                               # why any node is down/drained
 sprio -l                               # priority breakdown of pending jobs (QoS vs fairshare vs age)
 sshare -l                              # your fair-share standing (low = recent heavy usage)

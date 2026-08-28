@@ -63,11 +63,36 @@ A higher tier always outranks a lower one in the queue; fair-share and wait-time
 
 A user must be added to one of these accounts (`sacctmgr add user`) before they can submit at all.
 
+## Sharing the cluster with coursework
+
+The same four nodes also carry a course. Three facts matter for research work, and nothing else about
+the course policy belongs in a research answer:
+
+1. **Course tiers rank below every research tier** in the queue, and they are not in `debug` at all
+   (`debug` is restricted to the research accounts). A course job never outranks yours.
+2. **No new preemption.** `scavenger` is still the only thing ever preempted, still by REQUEUE. The
+   course policy added no preemption path that can touch a research job.
+3. **Standing reservations hold a slice of the cluster** for the course on a recurring weekday/weekend
+   schedule. Research jobs schedule around them.
+
+The size and hours of that slice are **actively tuned** as demand shifts between teaching and
+research — so it is not a constant, and quoting a remembered number will be wrong sooner or later.
+Read it live instead:
+
+```bash
+scontrol show res              # what's reserved, for whom, when, and how much (State=ACTIVE = now)
+sinfo -o '%P %a %l %D %t %N'   # partition/node availability
+squeue -t PENDING --start      # what the scheduler thinks your ETA is
+```
+
+Research submission behavior itself is unchanged: same partitions, same QoS tiers, same defaults,
+same flags. The controller handles course jobs on a separate branch that research jobs never enter.
+
 ## Partitions
 
 | Partition | Default? | Nodes | MaxTime | Notes |
 |---|---|---|---|---|
-| `main` | **Yes** | sprc[00-03] | 3 days | All **batch** work (`sbatch`). Batch walltime/priority comes from your QoS, not the partition. |
+| `main` | **Yes** | sprc[00-03] | 3 days | All **batch** work (`sbatch`). Batch walltime/priority comes from your QoS, not the partition. Also carries the lower-ranked course tiers. |
 | `debug` | No | sprc[00-03] | 1 hour | **Home for every interactive session** (`salloc`/`srun`) plus quick sanity checks. Higher `PriorityTier` (jumps the *pending* queue, does **not** preempt). Research accounts only. |
 
 **You do not choose the partition — `job_submit.lua` routes by job kind.** `sbatch` → `main`.

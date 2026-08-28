@@ -1,7 +1,7 @@
 {
   "name": "sprc-slurm",
   "description": "Run work on the lab's sprc H100 Slurm cluster: stage and submit jobs, interactive GPU sessions, pick QoS/walltime, monitor and debug — execute-first, not a tutorial.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "Max Bromberg"
   },

@@ -9,6 +9,8 @@
 #   - Set an HONEST --time: short accurate walltimes backfill sooner; jobs are
 #     KILLED at the limit. Caps: normal=3d, undergrad=1d, expedite=24h, scavenger=1d.
 #   - Make long work checkpoint/resume — jobs can hit walltime or (scavenger) be requeued.
+#     For anything long or preemptible, start from `checkpoint-job.sbatch` instead:
+#     it wires up --requeue and the pre-kill USR1 trap that this template omits.
 # =============================================================================
 
 #SBATCH --job-name=myrun           # shows in squeue
