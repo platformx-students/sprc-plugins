@@ -24,7 +24,7 @@ tool below.
 ### Claude Code
 
 ```
-/plugin marketplace add max-bromberg/sprc-plugins
+/plugin marketplace add platformx-students/sprc-plugins
 /plugin install sprc-slurm@sprc-plugins
 /reload-plugins
 ```
@@ -34,14 +34,14 @@ tool below.
 As a marketplace plugin:
 
 ```
-omp plugin marketplace add max-bromberg/sprc-plugins
+omp plugin marketplace add platformx-students/sprc-plugins
 omp plugin install sprc-slurm@sprc-plugins
 ```
 
 Or install the whole repo as a single plugin in one line:
 
 ```
-omp install github:max-bromberg/sprc-plugins
+omp install github:platformx-students/sprc-plugins
 ```
 
 The skill should show up as `/skill:slurm`.
@@ -52,7 +52,7 @@ Both read the same `SKILL.md` format. Clone the repo and run the installer — i
 into each tool's skills directory:
 
 ```
-git clone https://github.com/max-bromberg/sprc-plugins
+git clone https://github.com/platformx-students/sprc-plugins
 cd sprc-plugins
 ./install.sh
 ```
