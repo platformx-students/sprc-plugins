@@ -5,9 +5,15 @@
 #
 # Reminders:
 #   - You get NO GPU unless you ask (--gres). CPUs/RAM auto-derive from the GPU
-#     count (32 CPU + ~384 GB per GPU), so usually you only set GPUs + time.
-#   - Set an HONEST --time: short accurate walltimes backfill sooner; jobs are
-#     KILLED at the limit. Caps: normal=3d, undergrad=1d, expedite=24h, scavenger=1d.
+#     count (32 CPU + 384,000 MB per GPU, shown as 375G in sacct), so usually you
+#     only set GPUs + time.
+#   - ALWAYS set --time. Omitting it does NOT give you the 3-day max — you get the
+#     partition default of 2 HOURS and a kill at the mark. Set it honestly: short
+#     accurate walltimes backfill sooner; jobs are KILLED at the limit.
+#     Caps: normal=3d, undergrad=1d, expedite=24h, scavenger=1d.
+#   - Submit from shared storage (/home, /projects, /data, /fast-data) — NOT /tmp.
+#     --output lands in the submit dir, and a compute node cannot see the login
+#     node's /tmp, so the job "succeeds" and the output vanishes.
 #   - Make long work checkpoint/resume — jobs can hit walltime or (scavenger) be requeued.
 #     For anything long or preemptible, start from `checkpoint-job.sbatch` instead:
 #     it wires up --requeue and the pre-kill USR1 trap that this template omits.

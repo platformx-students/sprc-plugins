@@ -4,14 +4,14 @@
     "name": "Max Bromberg"
   },
   "metadata": {
-    "description": "Internal Claude Code plugins for the lab's sprc HPC cluster.",
-    "version": "0.2.0"
+    "description": "Private plugin marketplace for the lab's sprc H100 Slurm cluster. Cross-agent Agent Skills (Claude Code, codex, oh-my-pi, opencode).",
+    "version": "0.3.0"
   },
   "plugins": [
     {
       "name": "sprc-slurm",
       "source": "./plugins/sprc-slurm",
-      "description": "How to run computational work on the lab's sprc H100 Slurm cluster (controller sprlab005): stage and submit sbatch jobs, interactive salloc GPU sessions, choosing QoS/walltime, and monitoring/debugging \u2014 execute-first."
+      "description": "Run work on the lab's sprc H100 Slurm cluster (controller sprlab005): stage and submit sbatch jobs, interactive salloc GPU sessions, pick GPUs/walltime/QoS, checkpoint and requeue long runs, right-size from what the last job used, and monitor/debug \u2014 execute-first, not a tutorial."
     }
   ]
 }

@@ -1,10 +1,20 @@
 {
   "name": "sprc-plugins",
-  "version": "0.1.0",
-  "description": "Slurm superpowers for the lab's sprc H100 cluster, as an agent skill (Claude Code, oh-my-pi, opencode, codex).",
+  "version": "0.3.0",
+  "description": "Slurm superpowers for the lab's sprc H100 cluster, as a cross-agent Agent Skill (Claude Code, codex, oh-my-pi, opencode).",
   "license": "MIT",
   "author": "Max Bromberg",
   "repository": "github:platformx-students/sprc-plugins",
-  "keywords": ["slurm", "hpc", "gpu", "sprc", "sprlab005", "cluster", "sbatch", "skill"],
-  "pi": {}
+  "keywords": [
+    "slurm",
+    "hpc",
+    "gpu",
+    "sprc",
+    "sprlab005",
+    "cluster",
+    "sbatch",
+    "skill"
+  ],
+  "pi": {},
+  "private": true
 }

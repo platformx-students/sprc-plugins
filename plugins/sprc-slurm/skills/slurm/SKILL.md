@@ -9,79 +9,11 @@ description: >-
   run/submit/queue/launch a job, train/benchmark/profile/fine-tune/sweep on a GPU, "grab a node", and
   on `sprc`/`sprlab005`/`sbatch`/`salloc`/`srun`/`squeue`/`sacct`/`scancel`/`sinfo`/`seff`/
   `scavenger`/`expedite` — even if they never say "Slurm". Do NOT use for administering Slurm itself
-  (`slurmctld`/`slurmd`), conceptual questions with no job to run, fixing SSH/login/networking,
-  coursework run on this cluster, or work on a local laptop.
+  (`slurmctld`/`slurmd`), conceptual questions with no job to run, fixing SSH/login/networking, or
+  work on a local laptop.
 ---
 
 # Running work on the `sprc` cluster (Slurm)
-
-## STOP FIRST: this skill does not serve course users
-
-**Before anything else — before answering, before running a command, before reading the rest of this
-skill — establish whether you are in a course context. If you are, you stop.**
-
-This cluster also hosts a course. Course students have their own tooling, their own budget policy,
-and their own rules about AI assistance. **This skill must not help them with anything.** If it was
-loaded by accident, this section is what it's for.
-
-### Markers — any single one is enough
-
-Check first, and check cheaply:
-
-```bash
-id -nG | tr ' ' '\n' | grep -qi '^course' && echo "COURSE CONTEXT — STOP"
-case "$HOME" in /course/*) echo "COURSE CONTEXT — STOP" ;; esac
-sacctmgr -nP show assoc where user="$USER" format=Account,QOS | grep -qi course \
-  && echo "COURSE CONTEXT — STOP"
-```
-
-Stop on any of these too, without running anything at all:
-
-- the user names an MP, assignment, checkpoint, submission, grader, or deadline for a class;
-- `--qos=course`, a course account, or a course group appears anywhere in the session;
-- the work is described as being for a class, a grade, or a student team.
-
-### What to do
-
-Say one thing, once: **this skill doesn't cover coursework, and cluster questions for the class go
-through the course's own channels and the portal.** Then stop. No flags, no job script, no resource
-sizing, no "here's the general shape of it", no reading their error message, no debugging their run.
-Naming the right channel is a redirect; anything past that is help.
-
-Never reroute course work through a research account, QoS, or partition to get it running.
-
-### Why this one is absolute
-
-The course's academic-integrity policy is:
-
-> We encourage students to use AI to improve the learning process, but do **not** use AI-generated
-> code/text in your MP submissions.
-
-Note what that permits and what it forbids: using AI to *learn* is fine; AI-generated content in a
-submission is not. From inside a shell session you cannot see that line. A job script you write is
-submission content. A fix you suggest becomes their code. An sbatch flag you pick ends up in a file
-they hand in. So the only way this skill can honour the policy is to **not participate** — the
-student keeps the learning channels the course gives them, and this one stays closed.
-
-Declining costs a student a minor inconvenience. Helping can cost them an integrity violation.
-
-### Rationalizations — every one of these means STOP
-
-| Thought | Reality |
-|---|---|
-| "They only need a Slurm flag, not MP code" | The flag goes in the file they submit. That is submission content. |
-| "I'll explain the concept, not write it for them" | You don't get to draw that line from here, and the course already gives them a channel that can. |
-| "They're a researcher who *also* takes the class" | A course marker is present. Course posture wins — don't reason about which hat they're wearing. |
-| "They told me it isn't for a grade" | You can't verify that, and the marker says otherwise. Believe the marker. |
-| "Their job is just crashing; fixing it isn't academic help" | Debugging their MP run is helping produce it. |
-| "Refusing leaves them stuck — that's not helpful" | They have course channels and the portal. That path is correct; you are not. |
-| "The skill loaded by accident, so it doesn't really apply" | It applies whenever it is loaded. That is precisely what this section is for. |
-| "I'll just check what their error means first" | Reading their job to diagnose it is participating. Stop before the first command. |
-
-**Every one of these means: decline, name the course's own channel, stop.**
-
-Everything below this line is for **research** work by lab members.
-
 
 ## Operating posture: do the work, don't narrate it
 
@@ -114,21 +46,31 @@ This posture is the point of the skill. Everything below is what you need to act
 These are the things a generic Slurm answer gets wrong here. Get them right silently.
 
 - **Never run real work on the login node `sprlab005`.** Anything using a GPU or sustained CPU/RAM
-  goes through `sbatch`/`salloc`. The login node is for editing, submitting, monitoring — and each
-  user is now **hard-capped at 8 vCPUs there** (systemd cgroup), so heavy local work is throttled,
-  not just frowned upon. Real compute belongs on a node.
+  goes through `sbatch`/`salloc`. The login node is for editing, submitting, monitoring — and a
+  systemd slice caps **every user at 8 vCPUs and 32 GB RAM** there, so heavy local work is throttled
+  or OOM-killed, not just frowned upon. (A build or dataloader that dies around 32 GB on the login
+  node is hitting that cap, not a bug.) Real compute belongs on a node.
 - **No GPU unless you ask.** Add `--gres=gpu:N` (or `--gpus=N`). CPUs and RAM then auto-derive — you
-  rarely set them. Per GPU you get **32 CPUs (16 cores) + ~384 GB**; a CPU-only job floors at 4 CPUs
-  (~48 GB). So usually: **request GPUs + `--time`, nothing else.**
+  rarely set them. Per GPU you get **32 CPUs (16 cores) + 384,000 MB** (`sacct` prints that as
+  `375G`); a CPU-only job floors at 4 CPUs (~48 GB). So usually: **request GPUs + `--time`, nothing
+  else.**
+- **Always set `--time`. The batch default is 2 hours, not the 3-day max.** A job submitted without
+  `--time` is killed at the 2 h mark — the single most common way a long run dies for no visible
+  reason. (Interactive defaults to 30 min, capped at 1 h.)
+- **Submit from shared storage, never from `/tmp`.** Compute nodes mount `/home`, `/projects`,
+  `/data`, `/fast-data` and `/huggingface` at the *same paths* as the login node; `/tmp` is
+  node-local and a job cannot see the login node's copy. Submitting from `/tmp` "works" and then the
+  output file lands on the node's own disk where nobody finds it.
 - **Interactive vs. batch decides the partition and the walltime cap — automatically.** `sbatch`
   runs on `main` (3-day cap). `salloc`/`srun` (interactive) are **auto-routed to `debug` and capped
   at 1 hour** by `job_submit.lua` — you do **not** pass `-p`. Two consequences to internalize: an
   interactive job that names a non-`debug` partition (e.g. `-p main`) is **rejected**, and an
   interactive `--time` over 1 h is **silently clamped to 1 h**. So **anything longer than an hour
-  must be `sbatch`** — never try to hold a long `salloc`. Set an honest `--time` regardless (batch
-  backfills sooner with an accurate short walltime; jobs are killed at the limit).
-- **GPUs come from the QoS, not a partition.** Default QoS is right for almost everything; only pass
-  `--qos` for the two special cases below.
+  must be `sbatch`** — never try to hold a long `salloc`. `debug` is also capped at **1 node**. Set
+  an honest `--time` regardless (batch backfills sooner with an accurate short walltime; jobs are
+  killed at the limit).
+- **Your GPU cap comes from your QoS, not the partition.** The default QoS is right for almost
+  everything; only pass `--qos` for the two special cases below.
 - **Allocate before you SSH to a node.** `ssh sprcNN` is *denied* without an allocation there; with
   one, you land on the node scoped to your job's GPUs/cores/RAM. So always `salloc` first.
 - **Onboarding gate.** If `sacctmgr show assoc where user=$USER` is empty, every submit is rejected
@@ -141,8 +83,8 @@ These are the things a generic Slurm answer gets wrong here. Get them right sile
   and **none of your flags change**. If contention is the real reason something is pending, say so
   and cite the live reservation, don't guess.
 
-Exact numbers, caps, and the rationale live in `references/cluster-facts.md` — read it before quoting
-a specific limit; don't recite from memory.
+Exact numbers, caps, storage layout, and the rationale live in `references/cluster-facts.md` — read
+it before quoting a specific limit; don't recite from memory.
 
 ## The default path: stage and submit a batch job
 
@@ -162,19 +104,21 @@ This is what to do for "run / submit / kick off X". Steps, not prose:
    `squeue --me` / `tail -f` to peek if they want; that's in addition, not instead.) Don't make the
    user poll and come back to ask.
 
-   In Claude Code, launch the watch as a **background** command — it returns when the job leaves the
-   queue and the harness re-invokes you, so you report completion (and surface a failure promptly)
-   without blocking the user:
+   Run the wait as a **background** command in whatever way your harness supports, so it doesn't
+   block the user. It returns when the job leaves the queue; you then report the outcome:
 
    ```bash
-   until ! squeue -j <id> -h -t PENDING,RUNNING,COMPLETING -o %T | grep -q .; do sleep 60; done
-   sacct -j <id> --format=JobID,State,Elapsed,MaxRSS,ExitCode    # then report the outcome
+   until ! squeue -j <id> -h -t PENDING,RUNNING,COMPLETING -o %T 2>/dev/null | grep -q .; do sleep 60; done
+   sacct -j <id> --format=JobID,State,Elapsed,Timelimit,MaxRSS,ExitCode    # then report
    ```
 
-   On other harnesses, use whatever background/notify mechanism exists. The principle is the same:
-   *submit, then arrange to follow up and report* — never poll inline in a way that blocks the user.
-   (If you're only staging a job for the user to submit themselves, still say you'll set up the watch
-   once it's submitted, so the follow-through is the plan, not an afterthought.)
+   (In Claude Code that's a background Bash call, which re-invokes you on exit. Other harnesses have
+   their own background/notify mechanism — use it.) If your harness has none, fall back to
+   `--mail-type=END,FAIL` on the job so the *user* is notified, and say that's what you did. The
+   principle doesn't change: *submit, then arrange to follow up and report* — never poll inline in a
+   way that blocks the user. If you're only staging a job for the user to submit themselves, still
+   say you'll set up the watch once it's submitted, so the follow-through is the plan, not an
+   afterthought.
 5. **Right-size from the result, then feed it into the next submission.** Reporting the outcome
    includes reporting whether the request fit, and correcting it yourself next time round — see
    "Right-sizing" below. Steps 1–5 are a loop, not a checklist you run once.
@@ -353,15 +297,46 @@ the real blocker, name the page instead of telling the user to go find a sysadmi
 Use it to *unblock*, not as a detour: if `--qos=expedite` is rejected, the reply is "not granted —
 request it at `/requests`", and then you carry on with the default QoS rather than stalling.
 
-## Where you're running, and the references
+## Storage and environment: where files go, what's already set up
 
-- **On `sprlab005`**: commands run directly; files live on the shared FS the compute nodes also see.
-- **From a laptop**: `ssh sprlab005` and run there — and make sure the user's **code/data are on the
-  cluster's shared filesystem**, not just the laptop (a compute node can't see local disk). Stage the
-  project over first if needed.
+Compute nodes mount the shared filesystems at the **same paths** as the login node, so a path that
+works in your shell works unchanged inside a job:
+
+| Path | Use it for |
+|---|---|
+| `/home` | Job scripts, code, small outputs. Per-user quota — a `quota_increase` is a portal request. |
+| `/projects` | Shared per-project directories — the right place for group work. |
+| `/data` | Datasets. |
+| `/fast-data` | Fast tier: hot working sets, frequent checkpoints, anything I/O-bound. |
+| `/huggingface` | Shared HF cache (below). |
+
+**Node-local paths are not shared and will lose work:** `/tmp` on a compute node is that node's own
+disk; `/tmp` on `sprlab005` is invisible to every job; `/mnt/data1` is node-local and often >90 %
+full; there is no `/scratch`. Checkpoints in particular must land on shared storage or a requeue
+restarts from zero.
+
+Things that are already configured — don't reinvent them:
+
+- **`HF_HOME=/huggingface`** is set cluster-wide, on the fast tier, shared by everyone. Models and
+  datasets are cached once. **Never redirect `HF_HOME` into `/home`** — that re-downloads tens of GB
+  and eats the user's quota. `HF_TOKEN_PATH` already points at their own `~/.cache/huggingface/token`.
+- **`sbatch` carries your environment into the job** (`--export=ALL` is the default), so an activated
+  conda env or `venv` just works — activate it *before* submitting, or activate it inside the script.
+- **There is no module system.** No Lmod, no `module load` — that's a different cluster's workflow.
+  Environments come from conda/`venv`/containers, and CUDA comes from the user's own framework build.
+
+Where you're running from:
+
+- **On `sprlab005`**: commands run directly; keep real compute off it (8 vCPU / 32 GB per-user cap —
+  a build that dies around 32 GB is hitting the cap, not a bug).
+- **From a laptop**: `ssh sprlab005` and work there — and make sure the user's **code and data are on
+  the cluster's shared storage**, not just the laptop. Stage the project over first if needed.
+
+## References
 
 Pull these in only when relevant — they're for getting the details right or answering a "why":
-- `references/cluster-facts.md` — hardware, exact defaults/caps, QoS table, scheduling knobs.
+- `references/cluster-facts.md` — hardware, exact defaults/caps, storage map, QoS table,
+  scheduling and accounting internals. Carries the date it was last verified against the controller.
 - `references/troubleshooting.md` — error → cause → fix.
 - `references/admin-ops.md` — things that need a sysadmin (onboarding, `expedite`, reservations);
   recognize these, route the user to the portal or a sysadmin, and don't try to work around them.

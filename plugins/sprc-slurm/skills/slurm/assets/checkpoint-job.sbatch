@@ -28,9 +28,11 @@
 
 set -euo pipefail
 
-# Checkpoints MUST live on the shared filesystem. A node-local path (/tmp, and
-# anything else not visible cluster-wide) is gone by the time you resume, quite
-# possibly on a different node.
+# Checkpoints MUST live on shared storage: /home, /projects, /data, or /fast-data,
+# which every node mounts at the same path. A node-local path (/tmp, /mnt/data1)
+# is gone by the time you resume, quite possibly on a different node — and so is
+# anything under the LOGIN node's /tmp, which no job can see at all.
+# For frequent/large checkpoints prefer the fast tier: CKPT_DIR=/fast-data/$USER/myrun/ckpt
 CKPT_DIR="$SLURM_SUBMIT_DIR/ckpt"
 mkdir -p "$CKPT_DIR"
 
