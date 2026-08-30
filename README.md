@@ -32,10 +32,11 @@ installing, make sure git can reach the repo:
 
 ```bash
 gh auth login          # or: gh auth setup-git   (if you already have a token)
-git ls-remote git@github.com:platformx-students/sprc-plugins >/dev/null && echo "access OK"
+git ls-remote git@github.com:platformx-students/sprc-plugins >/dev/null && echo "git auth OK"
 ```
 
-If that fails, you don't have access yet — ask Max.
+If that fails it's this machine's git credentials, not your access — you're reading this, so you're
+already in the org. Run `gh auth login` (or add an SSH key) and try again.
 
 ## Install
 
