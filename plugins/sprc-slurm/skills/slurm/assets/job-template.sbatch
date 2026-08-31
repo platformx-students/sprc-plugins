@@ -15,12 +15,10 @@
 #   - Make long work checkpoint/resume — jobs can hit walltime or (scavenger) be requeued.
 #     For anything long or preemptible, start from `checkpoint-job.sbatch` instead:
 #     it wires up --requeue and the pre-kill USR1 trap that this template omits.
-#   - Put substantial data, weights, caches, checkpoints, and outputs in the
-#     user-approved shared project root, not $HOME or the source repository.
 # =============================================================================
 
 #SBATCH --job-name=myrun           # shows in squeue
-#SBATCH --gres=gpu:1               # number of GPUs; DELETE this line for a CPU-only job
+# #SBATCH --gres=gpu:1             # uncomment only when the workload uses a GPU
 #SBATCH --time=8:00:00             # HH:MM:SS or D-HH:MM:SS — estimate + margin, don't max it out
 #SBATCH --output=%x-%j.out         # small log in submit dir; route large logs to project storage
 # --- resource tuning (use measured needs or references/workload-allocations.md) ---
@@ -33,7 +31,7 @@
 set -euo pipefail
 
 echo "Job $SLURM_JOB_ID on $(hostname) — started $(date)"
-nvidia-smi -L || true              # confirm we see exactly the GPU(s) we requested (omit for CPU-only)
+# nvidia-smi -L                    # optionally verify the allocated GPU count
 
 # --- your work -------------------------------------------------------------
 # Resolve project data/cache/output paths with the user before replacing this

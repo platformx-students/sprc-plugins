@@ -20,8 +20,8 @@ use. Memory values are host RAM, not GPU VRAM.
 | Workload | Placement | Resource-minimal starting point |
 |---|---|---|
 | Formatting | Host | No allocation |
-| Lint or small static analysis | Host if within thresholds | If larger: batch with `--cpus-per-task=2 --mem=8G --time=00:10:00` |
-| Targeted unit tests | Host if within thresholds | If larger: batch with `--cpus-per-task=2 --mem=8G --time=00:10:00` |
+| Lint or small static analysis | Host if within thresholds | If larger: batch with `--cpus-per-task=4 --mem=8G --time=00:10:00` |
+| Targeted unit tests | Host if within thresholds | If larger: batch with `--cpus-per-task=4 --mem=8G --time=00:10:00` |
 | Full test suite | Host only when known to remain within thresholds | Batch with `--cpus-per-task=4 --mem=12G --time=00:20:00` |
 | Small incremental compilation | Host if within thresholds | No allocation |
 | Clean or parallel C/C++/Rust/CUDA compilation | Batch worker | `--cpus-per-task=8 --mem=16G --time=00:30:00` |

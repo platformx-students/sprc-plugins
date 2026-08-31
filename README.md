@@ -26,9 +26,9 @@ else that reads the format.
 `platformx-students` org — that's the whole access control, so there's nothing to configure on the
 cluster side.
 
-Every install path below authenticates as *you*: Claude Code's `/plugin marketplace add` uses your
-existing git credential helper, and the codex/opencode path is a plain `git clone`. So before
-installing, make sure git can reach the repo:
+Every install path below authenticates as *you*: `npx skills` and the clone-based installer use your
+configured Git/GitHub credentials, while Claude Code's `/plugin marketplace add` uses its local
+marketplace clone. Before installing, make sure Git can reach the repository:
 
 ```bash
 gh auth login          # or: gh auth setup-git   (if you already have a token)
@@ -141,6 +141,7 @@ codex/opencode you can also invoke it explicitly (`$slurm` in codex, the `skill`
 |---|---|
 | `SKILL.md` | Operating posture, the batch/interactive/scavenger paths, right-sizing loop, storage and environment, portal routing |
 | `references/cluster-facts.md` | Hardware, exact defaults and caps, storage map, QoS table, scheduling and accounting internals |
+| `references/workload-allocations.md` | Host-versus-worker examples and resource-minimal starting allocations |
 | `references/troubleshooting.md` | Error → cause → fix, for pending, rejected, and failed jobs |
 | `references/admin-ops.md` | The things that need a sysadmin, and how to route them |
 | `assets/job-template.sbatch` | Annotated starting point for an ordinary batch job |

@@ -15,7 +15,7 @@ Always **read the actual reason before changing flags**. Get it from:
 | `QOSMaxGRESPerUser` / `QOSMaxGRESPerUserLimit` | You're at your per-user GPU cap (4 normal / 2 undergrad / 8 scavenger). | Let your running jobs finish, or cancel one. Not routable around. |
 | `QOSMaxJobsPerUserLimit` / `AssocMaxSubmitJobLimit` | Too many submitted jobs. | Wait for some to drain, or cancel. |
 | `ReqNodeNotAvail` / `Reserved` | Node drained, or capacity held by a reservation (part of the cluster is reserved for a course on a recurring schedule). | Check `sinfo -R` and `scontrol show res` — an `State=ACTIVE` reservation shows what's held and until when. Wait it out, or size the job to fit what's left. Not an error, and not routable around. |
-| `PartitionTimeLimit` | `--time` exceeds the partition/QoS cap. | Lower `--time` (or use a QoS/partition with a longer cap). |
+| `PartitionTimeLimit` | `--time` exceeds the automatically selected partition or QoS cap. | Lower `--time`; if interactive work needs more than 1 h, switch to `sbatch`. Do not choose a partition manually. |
 
 ## Rejected at submit time
 

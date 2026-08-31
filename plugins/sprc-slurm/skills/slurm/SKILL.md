@@ -178,7 +178,6 @@ Minimal correct script (the template asset is the annotated version):
 ```bash
 #!/bin/bash
 #SBATCH --job-name=myrun
-#SBATCH --gres=gpu:1
 #SBATCH --time=8:00:00
 #SBATCH --output=%x-%j.out
 set -euo pipefail

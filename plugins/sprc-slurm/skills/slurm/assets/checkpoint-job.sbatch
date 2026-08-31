@@ -19,7 +19,7 @@
 # =============================================================================
 
 #SBATCH --job-name=myrun
-#SBATCH --gres=gpu:1
+# #SBATCH --gres=gpu:1             # uncomment only when the workload uses a GPU
 #SBATCH --time=1-00:00:00          # scavenger cap is 1 day; normal is 3 days
 #SBATCH --output=%x-%j.out
 #SBATCH --requeue                  # REQUIRED: allow restart after preemption
