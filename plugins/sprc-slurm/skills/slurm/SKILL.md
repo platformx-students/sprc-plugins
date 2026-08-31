@@ -1,16 +1,17 @@
 ---
 name: slurm
 description: >-
-  Use when getting work running on the lab's `sprc` H100 GPU cluster (login/controller `sprlab005`)
-  via Slurm, not just explaining it: staging and submitting `sbatch` jobs, opening interactive
-  `salloc` GPU sessions, SSHing to a compute node, picking GPUs/CPUs/memory/walltime and QoS
-  (`normal`/`undergrad`/`expedite`/`scavenger`), making long runs checkpoint and requeue, watching a
-  run and right-sizing the next one, or troubleshooting a pending/stuck/failed job. Triggers on
-  run/submit/queue/launch a job, train/benchmark/profile/fine-tune/sweep on a GPU, "grab a node", and
-  on `sprc`/`sprlab005`/`sbatch`/`salloc`/`srun`/`squeue`/`sacct`/`scancel`/`sinfo`/`seff`/
-  `scavenger`/`expedite` — even if they never say "Slurm". Do NOT use for administering Slurm itself
-  (`slurmctld`/`slurmd`), conceptual questions with no job to run, fixing SSH/login/networking,
-  coursework run on this cluster, or work on a local laptop.
+  Use when getting research work running on the lab's `sprc` cluster, including deciding whether
+  light work belongs on the host `sprlab005` or compute work belongs on `sprc00`–`sprc03` via
+  Slurm: staging or downloading project data, submitting `sbatch` jobs, opening interactive
+  `salloc` sessions, compiling/building/testing, preprocessing/indexing, CPU or high-memory work,
+  LLM serving/inference/training, picking GPUs/CPUs/memory/walltime and QoS, checkpointing and
+  requeueing long runs, monitoring/right-sizing jobs, or troubleshooting pending/stuck/failed work.
+  Triggers on run/submit/queue/launch/build/compile/test/preprocess/serve/train/benchmark/profile/
+  fine-tune/sweep, "grab a node", and on `sprc`/`sprlab005`/`sbatch`/`salloc`/`srun`/`squeue`/
+  `sacct`/`scancel`/`sinfo`/`seff`/`scavenger`/`expedite` — even if they never say "Slurm". Do NOT
+  use for administering Slurm itself (`slurmctld`/`slurmd`), conceptual questions with no work to
+  run, fixing SSH/login/networking, coursework run on this cluster, or work on a local laptop.
 ---
 
 # Running work on the `sprc` cluster (Slurm)
@@ -82,20 +83,47 @@ Declining costs a student a minor inconvenience. Helping can cost them an integr
 
 Everything below this line is for **research** work by lab members.
 
+## First route work to the right machine
+
+The agent may already be running on `sprlab005`. That makes it convenient, not a compute worker.
+
+| Machine | Role | Appropriate work |
+|---|---|---|
+| `sprlab005` | Host, login, controller, accounting, directly attached storage | Editing, Git, downloads and file staging, submission/monitoring, formatting, lint, small static analysis, targeted tests, small incremental builds |
+| `sprc00`–`sprc03` | Slurm compute workers | GPU work, commands over ~2 minutes, work over ~8 GB RAM, large builds/tests, preprocessing, analytics, simulation, training, inference, serving |
+
+`sprlab005` has 128 GB RAM in total but little swap, and it also runs the cluster control services.
+That installed RAM is not a workload budget.
+
+Run work directly on `sprlab005` only when it needs no GPU, should use no more than roughly 8 GB of
+working memory, and each compute command or pipeline stage should finish in roughly 2 minutes. Use
+Slurm when any one of those conditions is false, or when the work is inherently sustained or highly
+parallel. The 2-minute rule applies to computation, not elapsed wall time: downloads, file transfers,
+queue watches, and other low-CPU control operations may run longer on the host.
+
+Downloads and file staging normally belong on `sprlab005`, where the slower storage tiers are
+directly attached; write them into the user-approved shared project location. If unpacking,
+checksumming, converting, or processing the result crosses the memory/time boundary, submit that
+compute step separately.
+
+For worker work, default to `sbatch`; use `salloc` only when hands-on interaction is genuinely
+needed. Never pass a partition: Slurm routes batch and interactive work automatically. For concrete
+starting requests, consult `references/workload-allocations.md`, then right-size from measurements.
+
 
 ## Operating posture: do the work, don't narrate it
 
-The people on this cluster are experienced — they already know what Slurm is and how the workflow
-goes. They invoke you to **get their work running**, not to be taught the steps. So **default to
-executing**: figure out the resources, write the job script, submit it, and report back tersely
-(job id + the one command they'd use to watch it). Don't preface a run with a tutorial on QoS tiers,
-fair-share, or "here's how Slurm works" — that's noise they have to scroll past.
+The people on this cluster are experienced — they invoke you to **get their work running**, not to
+be taught the steps. So **default to executing**: route the work first, run host-safe work directly,
+or size and submit worker work, then report back tersely. Don't preface a run with a tutorial on QoS
+tiers, fair-share, or "here's how Slurm works" — that's noise they have to scroll past.
 
-- **Act first.** When the user describes work to run, *stage and submit it.* The deliverable is a
-  running (or ready-to-submit) job, not an explanation of how you'd submit it.
-- **Be terse.** A good response is the script you wrote + "Submitted job 12345; watch with
-  `tail -f myrun-12345.out`." A paragraph per flag is too much. When you report a *finished* job, one
-  extra line: whether the request fit, and what you're changing next time.
+- **Act first.** Route the work, then run it on the host or stage and submit it to a worker. The
+  deliverable is completed light work or a running/ready-to-submit job, not an explanation of what
+  the user could do.
+- **Be terse.** For host work, report the result. For worker work, report the script + "Submitted job
+  12345; watch with `tail -f myrun-12345.out`." When you report a finished job, add one line on
+  whether the request fit and what changes next time.
 - **Explain only on demand.** If the user asks "why", "how does X work", or "what are my options",
   *then* explain — and pull in the references below for the specifics.
 - **Terse ≠ withholding.** Brevity is about cutting what they already know, not what they need to
@@ -113,13 +141,10 @@ This posture is the point of the skill. Everything below is what you need to act
 
 These are the things a generic Slurm answer gets wrong here. Get them right silently.
 
-- **Never run real work on the login node `sprlab005`.** Anything using a GPU or sustained CPU/RAM
-  goes through `sbatch`/`salloc`. The login node is for editing, submitting, monitoring — and each
-  user is now **hard-capped at 8 vCPUs there** (systemd cgroup), so heavy local work is throttled,
-  not just frowned upon. Real compute belongs on a node.
-- **No GPU unless you ask.** Add `--gres=gpu:N` (or `--gpus=N`). CPUs and RAM then auto-derive — you
-  rarely set them. Per GPU you get **32 CPUs (16 cores) + ~384 GB**; a CPU-only job floors at 4 CPUs
-  (~48 GB). So usually: **request GPUs + `--time`, nothing else.**
+- **No GPU unless you ask.** Add `--gres=gpu:N` (or `--gpus=N`) and request the fewest GPUs the work
+  can use. Defaults provide **32 CPUs (16 cores) + ~384 GB per GPU**; convenient for heavy jobs but
+  oversized for light serving, inference, or profiling. Set explicit smaller CPU/RAM requests when
+  the workload needs less; use `references/workload-allocations.md` as a starting point.
 - **Interactive vs. batch decides the partition and the walltime cap — automatically.** `sbatch`
   runs on `main` (3-day cap). `salloc`/`srun` (interactive) are **auto-routed to `debug` and capped
   at 1 hour** by `job_submit.lua` — you do **not** pass `-p`. Two consequences to internalize: an
@@ -144,18 +169,44 @@ These are the things a generic Slurm answer gets wrong here. Get them right sile
 Exact numbers, caps, and the rationale live in `references/cluster-facts.md` — read it before quoting
 a specific limit; don't recite from memory.
 
+## Resolve project storage before creating artifacts
+
+Before downloading or generating substantial datasets, model weights, caches, checkpoints, or run
+outputs, find the project's shared storage root in the user's request or existing project
+configuration. If neither specifies one, ask once:
+
+> What shared storage root should this project use for datasets, model weights, caches, checkpoints,
+> and run outputs?
+
+Reuse that answer for later jobs in the same project. Do not default substantial artifacts to
+`$HOME`, the source repository, or `$SLURM_SUBMIT_DIR`.
+
+- Source, configuration, and small metadata may stay in the repository.
+- Durable data, weights, checkpoints, outputs, and large logs go in the approved shared project root.
+- Put framework caches such as `HF_HOME`, `TORCH_HOME`, and `XDG_CACHE_HOME` beneath that root when
+  relevant.
+- Node-local temporary storage is only for disposable intermediates within one job; copy durable
+  results out before exit or requeue.
+- Small Slurm logs may stay beside the submission script.
+
+Download and stage on `sprlab005` into the approved shared location; run material compute through
+Slurm on `sprc00`–`sprc03`.
+
 ## The default path: stage and submit a batch job
 
 This is what to do for "run / submit / kick off X". Steps, not prose:
 
-1. **Decide** GPUs (from what the work needs) and an honest `--time` (estimate + ~25–50% margin,
-   under the 3-day cap). Leave CPU/RAM as defaults unless the work is lopsided.
-2. **Write the script.** Start from `assets/job-template.sbatch`, fill in the `#SBATCH` lines and the
+1. **Resolve storage.** Apply the storage gate above before downloading or creating substantial
+   artifacts. Keep the chosen root for the rest of the project.
+2. **Decide resources.** Pick the fewest GPUs the work can use, CPUs matching actual parallelism,
+   memory from the expected working set, and an honest `--time` (estimate + ~25–50% margin, under
+   the QoS cap). Start from `references/workload-allocations.md` when there is no measurement yet.
+3. **Write the script.** Start from `assets/job-template.sbatch`, fill in the `#SBATCH` lines and the
    work command. Launch the actual work with `srun` inside the script. For long runs, wire up
    checkpoint/resume and add `--requeue` — jobs can hit walltime or be requeued.
-3. **Submit** (`sbatch job.sbatch`), then **report** the job id + how it'll be watched. Don't run the
-   work yourself on the login node.
-4. **Own the follow-through — don't just hand over check commands and leave.** A long job isn't
+4. **Submit** (`sbatch job.sbatch`), then **report** the job id + how it'll be watched. Compute runs
+   on the allocated worker, not on `sprlab005`.
+5. **Own the follow-through — don't just hand over check commands and leave.** A long job isn't
    handled when you submit it; it's handled when you've reported how it *ended*. So your default is to
    **set up a background monitor yourself and tell the user you'll report back** — e.g. close with
    "Submitted job 12345 — I'll watch it and report when it finishes." (You can still give them a
@@ -175,9 +226,9 @@ This is what to do for "run / submit / kick off X". Steps, not prose:
    *submit, then arrange to follow up and report* — never poll inline in a way that blocks the user.
    (If you're only staging a job for the user to submit themselves, still say you'll set up the watch
    once it's submitted, so the follow-through is the plan, not an afterthought.)
-5. **Right-size from the result, then feed it into the next submission.** Reporting the outcome
+6. **Right-size from the result, then feed it into the next submission.** Reporting the outcome
    includes reporting whether the request fit, and correcting it yourself next time round — see
-   "Right-sizing" below. Steps 1–5 are a loop, not a checklist you run once.
+   "Right-sizing" below. Steps 2–6 are a loop; the project storage decision persists across it.
 
 Minimal correct script (the template asset is the annotated version):
 
@@ -217,7 +268,7 @@ A `scavenger` job *will* be requeued, and any job can hit its walltime — both 
 from the top. So "checkpoint it" is not advice, it's a precondition, and it means two concrete
 things. A job missing either one loses the work it already did:
 
-1. **Write state to the shared FS periodically, and load it on startup if it's there.**
+1. **Write state to the user-approved shared project storage periodically, and load it on startup.**
 2. **Add `--requeue` and catch the pre-kill signal** so the last stretch isn't thrown away.
 
 Slurm will warn you before the kill if you ask. `--signal=B:USR1@120` delivers `USR1` 120 s ahead of
@@ -228,8 +279,11 @@ see it:
 #SBATCH --requeue
 #SBATCH --signal=B:USR1@120
 
+: "${PROJECT_STORAGE:?Set PROJECT_STORAGE to the user-approved shared project storage root}"
+CKPT_DIR="$PROJECT_STORAGE/checkpoints/${SLURM_JOB_NAME:-myrun}"
+mkdir -p "$CKPT_DIR"
 trap 'echo "checkpointing early"; kill -USR1 "$PID" 2>/dev/null; wait "$PID"' USR1
-srun ./train.py --checkpoint-dir "$SLURM_SUBMIT_DIR/ckpt" --resume-if-exists &
+srun ./train.py --checkpoint-dir "$CKPT_DIR" --resume-if-exists &
 PID=$!
 wait "$PID"
 ```
@@ -355,12 +409,13 @@ request it at `/requests`", and then you carry on with the default QoS rather th
 
 ## Where you're running, and the references
 
-- **On `sprlab005`**: commands run directly; files live on the shared FS the compute nodes also see.
-- **From a laptop**: `ssh sprlab005` and run there — and make sure the user's **code/data are on the
-  cluster's shared filesystem**, not just the laptop (a compute node can't see local disk). Stage the
-  project over first if needed.
+- **On `sprlab005`**: run host-safe work and downloads directly; put project data in the approved
+  shared location, then submit material compute through Slurm. The compute nodes see shared storage.
+- **From a laptop**: `ssh sprlab005`, stage code/data into the approved shared location, and work
+  from there — compute nodes cannot see the laptop's local disk.
 
-Pull these in only when relevant — they're for getting the details right or answering a "why":
+Pull these in only when relevant — they're for getting details right or answering a "why":
+- `references/workload-allocations.md` — host-vs-worker examples and resource-minimal first requests.
 - `references/cluster-facts.md` — hardware, exact defaults/caps, QoS table, scheduling knobs.
 - `references/troubleshooting.md` — error → cause → fix.
 - `references/admin-ops.md` — things that need a sysadmin (onboarding, `expedite`, reservations);

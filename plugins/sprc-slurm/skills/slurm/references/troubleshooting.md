@@ -43,7 +43,7 @@ Always **read the actual reason before changing flags**. Get it from:
 | `scavenger` job keeps restarting / `State=REQUEUED` | A real job preempted it (by design). | Expected for `scavenger`. Ensure it checkpoints; or move to `normal` if it can't tolerate interruption. |
 | `CUDA error: no device` / can't see a GPU | Forgot `--gres=gpu:N`, or code ignores `CUDA_VISIBLE_DEVICES`. | Add the GPU request; verify with `nvidia-smi -L` inside the job (cgroup shows only allocated GPUs). |
 | Sees the wrong number of GPUs | Asked for fewer/more than the code expects. | Match `--gres=gpu:N` to the code; inside the job the cgroup exposes exactly N. |
-| Job runs but app can't find data/code | Files only on the laptop, not the shared FS. | Put the project on the cluster's shared filesystem before submitting (see SKILL.md "Where you're running"). |
+| Job runs but app can't find data/code | Files only on the laptop or a node-local path. | Stage downloads on `sprlab005` into the user-approved shared project storage, then point the job there; compute nodes cannot see laptop or node-local files. |
 
 ## Useful diagnostics
 

@@ -28,10 +28,13 @@
 
 set -euo pipefail
 
-# Checkpoints MUST live on the shared filesystem. A node-local path (/tmp, and
-# anything else not visible cluster-wide) is gone by the time you resume, quite
-# possibly on a different node.
-CKPT_DIR="$SLURM_SUBMIT_DIR/ckpt"
+# Checkpoints MUST live in the user-approved shared project storage. A node-local
+# path (/tmp, and anything else not visible cluster-wide) can disappear before a
+# resume on another node. Before submission, export PROJECT_STORAGE from the
+# user's answer or existing project configuration; do not default it to $HOME or
+# the source repository.
+: "${PROJECT_STORAGE:?Set PROJECT_STORAGE to the user-approved shared project storage root}"
+CKPT_DIR="${CKPT_DIR:-$PROJECT_STORAGE/checkpoints/${SLURM_JOB_NAME:-myrun}}"
 mkdir -p "$CKPT_DIR"
 
 echo "Job $SLURM_JOB_ID on $(hostname) — attempt ${SLURM_RESTART_COUNT:-0} — $(date)"

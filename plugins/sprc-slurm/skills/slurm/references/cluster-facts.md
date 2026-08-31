@@ -10,10 +10,14 @@ Quote limits/defaults from here, not from memory. Verify against the live contro
   physical cores**, SMT on → **128 logical CPUs**) · ~1.5 TB RAM · InfiniBand.
 - **Cluster total schedulable:** **8 GPUs, 256 physical cores (512 logical CPUs), ~6 TB RAM.**
 - **GRES name:** `gpu:h100_nvl:2` per node. Node features: `nvlink,h100,epyc9334`.
-- **Controller / login node:** `sprlab005` (Ubuntu 24.04, Slurm **23.11.4**, munge 0.5.15, cgroup v2).
-  This host is login + control plane + accounting. Do not run compute on it — each user is
-  **hard-capped at 8 vCPUs** here via a systemd per-user slice (`CPUQuota=800%`), so heavy local
-  work is throttled. (Admin accounts root/exx/mgmt are exempt.)
+- **Host / controller / login node:** `sprlab005` (Ubuntu 24.04, Slurm **23.11.4**, munge 0.5.15,
+  cgroup v2) runs login, control-plane, and accounting services. It has **128 GB RAM and little
+  swap**; that installed memory is shared host capacity, not a workload allocation. Each user is
+  also hard-capped at **8 vCPUs** via a systemd per-user slice (`CPUQuota=800%`; admin accounts
+  root/exx/mgmt are exempt). Light work is fine when it needs no GPU, stays around 8 GB RAM or less,
+  and each compute command takes around 2 minutes or less. Everything heavier belongs on
+  `sprc[00-03]` through Slurm. Downloads and file staging normally run on `sprlab005`, where the
+  slower storage tiers are directly attached.
 
 ## Slurm CPU vs. physical core
 
