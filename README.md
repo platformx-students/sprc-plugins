@@ -21,6 +21,17 @@ tool below.
 
 ## Install
 
+### `npx skills`
+
+Install with the [Vercel Skills CLI](https://github.com/vercel-labs/skills) from the GitHub source:
+
+```
+npx skills add platformx-students/sprc-plugins --skill slurm
+```
+
+This installs into the current project by default. Add `--global` for a user-wide install, or
+`--agent claude-code`, `--agent codex`, or `--agent opencode` to target one supported client.
+
 ### Claude Code
 
 ```

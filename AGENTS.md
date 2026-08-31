@@ -24,6 +24,7 @@ This repository distributes the lab's `slurm` Agent Skill across Claude Code, om
 - When changing shared behavior, search the skill, references, templates, manifests, installer, and README for affected callouts; update only what the change actually touches.
 - Keep detailed facts in references and reusable job scripts in assets. Keep the main skill focused on agent decisions and actions.
 - Keep host-versus-worker placement and project-storage rules consistent across the skill, references, and job templates.
+- Keep `npx skills` installation source-based; do not add an npm wrapper or duplicate the canonical skill.
 
 ## Verification
 
@@ -33,6 +34,7 @@ This repository distributes the lab's `slurm` Agent Skill across Claude Code, om
 | JSON metadata | `python3 -m json.tool <changed-file>` |
 | Installer | Run `./install.sh` against a temporary directory and inspect the resulting link |
 | Skill layout | Confirm `readlink skills/slurm` still targets the canonical source |
+| `npx skills` discovery | `npx -y skills add . --list` |
 
 There is no project-wide build or test suite unless the repository adds one. Do not invent infrastructure for a documentation-only change.
 
