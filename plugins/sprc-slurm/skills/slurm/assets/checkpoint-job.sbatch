@@ -28,12 +28,13 @@
 
 set -euo pipefail
 
-# Checkpoints MUST live on shared storage: /home, /projects, /data, or /fast-data,
-# which every node mounts at the same path. A node-local path (/tmp, /mnt/data1)
-# is gone by the time you resume, quite possibly on a different node — and so is
-# anything under the LOGIN node's /tmp, which no job can see at all.
-# For frequent/large checkpoints prefer the fast tier: CKPT_DIR=/fast-data/$USER/myrun/ckpt
-CKPT_DIR="$SLURM_SUBMIT_DIR/ckpt"
+# Checkpoints MUST live in the user-approved shared project storage under /home,
+# /projects, /data, or /fast-data. Prefer /fast-data for frequent or large
+# checkpoints. Node-local /tmp and /mnt/data1 can disappear before a resume on
+# another worker; the host's /tmp is invisible to jobs. Before submission, export
+# PROJECT_STORAGE from the user's answer or existing project configuration.
+: "${PROJECT_STORAGE:?Set PROJECT_STORAGE to the user-approved shared project storage root}"
+CKPT_DIR="${CKPT_DIR:-$PROJECT_STORAGE/checkpoints/${SLURM_JOB_NAME:-myrun}}"
 mkdir -p "$CKPT_DIR"
 
 echo "Job $SLURM_JOB_ID on $(hostname) — attempt ${SLURM_RESTART_COUNT:-0} — $(date)"

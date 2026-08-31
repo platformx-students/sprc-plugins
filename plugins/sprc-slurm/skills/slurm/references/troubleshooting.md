@@ -43,12 +43,12 @@ Always **read the actual reason before changing flags**. Get it from:
 | `scavenger` job keeps restarting / `State=REQUEUED` | A real job preempted it (by design). | Expected for `scavenger`. Ensure it checkpoints; or move to `normal` if it can't tolerate interruption. |
 | `CUDA error: no device` / can't see a GPU | Forgot `--gres=gpu:N`, or code ignores `CUDA_VISIBLE_DEVICES`. | Add the GPU request; verify with `nvidia-smi -L` inside the job (cgroup shows only allocated GPUs). |
 | Sees the wrong number of GPUs | Asked for fewer/more than the code expects. | Match `--gres=gpu:N` to the code; inside the job the cgroup exposes exactly N. |
-| Job runs but app can't find data/code | Files only on the laptop, or under a node-local path. | Put the project on shared storage (`/home`, `/projects`, `/data`, `/fast-data`) before submitting — those are mounted at the same paths on every node. |
+| Job runs but app can't find data/code | Files only on the laptop or under a node-local path. | Stage downloads on `sprlab005` into the user-approved shared root under `/home`, `/projects`, `/data`, or `/fast-data`, then point the job there; workers cannot see laptop or node-local files. |
 | **Killed at exactly `2:00:00`; `State=TIMEOUT`** | **No `--time` was set** — `main`'s `DefaultTime` is 2 h, not the 3-day max. | Set an explicit `--time`. This is the most common unexplained death of a long run. |
 | **`--output` file never appears; job shows `COMPLETED`** | Submitted from a path the node can't see — usually `/tmp` on `sprlab005`. The job ran and wrote its output to the *compute node's* local disk. | Resubmit from `/home` or `/projects`. Nothing is recoverable from the old run without visiting the node. |
-| `No space left on device` mid-run | Writing to node-local `/tmp` or `/mnt/data1` (often >90 % full). `TmpDisk=0`, so Slurm never schedules around this. | Point scratch and checkpoints at `/fast-data` or `/projects`. |
-| `module: command not found` | There is **no** environment-module system on this cluster. | Use the user's conda env / `venv` / container. Don't emit `module load`. |
-| `MaxRSS` is 0 or absurdly low on a short job | `JobAcctGatherFrequency=30` — a job shorter than one sampling interval may never be sampled. | Don't right-size memory from a run shorter than ~a minute. |
+| `No space left on device` mid-run | Writing to node-local `/tmp` or `/mnt/data1` (often >90% full). `TmpDisk=0`, so Slurm never schedules around this. | Point scratch and checkpoints at `/fast-data` or `/projects`. |
+| `module: command not found` | There is **no** environment-module system on this cluster. | Use the user's conda environment, `venv`, or container. Do not emit `module load`. |
+| `MaxRSS` is 0 or absurdly low on a short job | `JobAcctGatherFrequency=30` — a job shorter than one sampling interval may never be sampled. | Do not right-size memory from a run shorter than about a minute. |
 
 ## Useful diagnostics
 

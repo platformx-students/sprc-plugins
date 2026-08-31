@@ -13,14 +13,13 @@ config drifts from any snapshot. Last verified against the live controller **202
 - **Cluster total schedulable:** **8 GPUs, 256 physical cores (512 logical CPUs), ~6 TB RAM.**
 - **GRES name:** `gpu:h100_nvl:2` per node. Node features: `nvlink,h100,epyc9334`.
 - **`TmpDisk=0`** — Slurm schedules no node-local scratch. See "Storage" below.
-- **Controller / login node:** `sprlab005` (Ubuntu 24.04, Slurm **23.11.4**, munge 0.5.15, cgroup v2).
-  Login + control plane + accounting. Much smaller than a compute node: 2× Xeon E5-2687W v4,
-  **48 logical CPUs, ~125 GB RAM**. Do not run compute on it — see the caps below.
+- **Host / controller / login node:** `sprlab005` (Ubuntu 24.04, Slurm **23.11.4**, munge 0.5.15,
+  cgroup v2) runs login, control-plane, and accounting services. It has 2× Xeon E5-2687W v4,
+  **48 logical CPUs and 128 GB installed RAM (~125 GiB visible)**, much less than a compute node.
 
-### Login-node per-user caps (`sprlab005`)
+### Host per-user caps (`sprlab005`)
 
-A systemd per-user slice caps every user; heavy local work is throttled or OOM-killed, not merely
-frowned upon:
+A systemd per-user slice caps every user; the installed hardware is not a workload allocation:
 
 | Limit | Value |
 |---|---|
@@ -30,8 +29,11 @@ frowned upon:
 | Swap | `MemorySwapMax=8G` |
 | Processes | `TasksMax=4096` |
 
-Admin accounts (root, exx, mgmt) are exempt. A build or dataloader that dies on the login node
-around 32 GB is hitting this, not a bug — move it into a job.
+Admin accounts (root, exx, mgmt) are exempt. Light work is fine when it needs no GPU, stays around
+8 GB RAM or less, and each compute command takes around 2 minutes or less. Everything heavier belongs
+on `sprc[00-03]` through Slurm. A build or dataloader dying around 32 GB on the host is hitting the
+hard cap, not an application bug. Downloads and file staging normally run on `sprlab005`, where the
+slower storage tiers are directly attached.
 
 ## Slurm CPU vs. physical core
 
