@@ -1,6 +1,6 @@
 {
   "name": "sprc-plugins",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Slurm superpowers for the lab's sprc H100 cluster, as a cross-agent Agent Skill (Claude Code, codex, oh-my-pi, opencode).",
   "license": "MIT",
   "author": "Max Bromberg",

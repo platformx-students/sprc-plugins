@@ -1,0 +1,34 @@
+{
+  "name": "sprc-slurm-mods",
+  "version": "0.1.0",
+  "description": "Claude Code mod for the sprc Slurm cluster: a live cluster/job dashboard pane, status line, job lifecycle tools, finish notifications and submit guardrails.",
+  "author": { "name": "Max Bromberg" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "pollSeconds": {
+      "type": "number",
+      "title": "Poll interval (seconds)",
+      "description": "How often to refresh cluster and job state from Slurm. Minimum 10.",
+      "default": 30
+    },
+    "autoOpen": {
+      "type": "boolean",
+      "title": "Open the dashboard at session start",
+      "description": "Open the sprc pane beside the chat when a session starts (only placed on wide terminals).",
+      "default": true
+    },
+    "guards": {
+      "type": "string",
+      "title": "Submit guardrails",
+      "description": "enforce: block commands Slurm or the cluster would reject, and sleep/squeue polling loops; warn: let them run but tell the model; off: no checks (submitted jobs are still followed).",
+      "options": ["enforce", "warn", "off"],
+      "default": "enforce"
+    },
+    "liveContext": {
+      "type": "boolean",
+      "title": "Live cluster context",
+      "description": "Attach a one-line cluster summary to prompts that mention jobs, GPUs or Slurm.",
+      "default": true
+    }
+  }
+}

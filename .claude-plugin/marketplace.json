@@ -4,14 +4,19 @@
     "name": "Max Bromberg"
   },
   "metadata": {
-    "description": "Private plugin marketplace for the lab's sprc H100 Slurm cluster. Cross-agent Agent Skills (Claude Code, codex, oh-my-pi, opencode).",
-    "version": "0.3.0"
+    "description": "Private plugin marketplace for the lab's sprc H100 Slurm cluster: a cross-agent Agent Skill (Claude Code, codex, oh-my-pi, opencode), plus an optional Claude Code-only mod.",
+    "version": "0.4.0"
   },
   "plugins": [
     {
       "name": "sprc-slurm",
       "source": "./plugins/sprc-slurm",
-      "description": "Run work on the lab's sprc H100 Slurm cluster (controller sprlab005): stage and submit sbatch jobs, interactive salloc GPU sessions, pick GPUs/walltime/QoS, checkpoint and requeue long runs, right-size from what the last job used, and monitor/debug \u2014 execute-first, not a tutorial."
+      "description": "Run work on the lab's sprc H100 Slurm cluster (controller sprlab005): stage and submit sbatch jobs, interactive salloc GPU sessions, pick GPUs/walltime/QoS, checkpoint and requeue long runs, right-size from what the last job used, and monitor/debug — execute-first, not a tutorial."
+    },
+    {
+      "name": "sprc-slurm-mods",
+      "source": "./plugins/sprc-slurm-mods",
+      "description": "Claude Code only (not a skill; other harnesses ignore it). Live sprc cluster state inside Claude Code: a status line and /sprc dashboard pane, job tools for the model (status, job detail, wait, follow), finish notifications with right-sizing advice, and guardrails for commands the cluster would reject. Active only in sessions on the sprc cluster. Pairs with sprc-slurm."
     }
   ]
 }

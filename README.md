@@ -18,7 +18,11 @@ execute-first, terse, tuned to this cluster's real defaults and policies.
 
 The skill is a single [Agent Skill](https://agentskills.io) (`SKILL.md` + references + job
 templates), so the same content works across Claude Code, codex, oh-my-pi, opencode, and anything
-else that reads the format.
+else that reads the format. It is deliberately harness-neutral and needs nothing else.
+
+There is also an optional, **Claude Code-only** plugin, [`sprc-slurm-mods`](#claude-code-extra-sprc-slurm-mods):
+a live cluster dashboard, job tracking and guardrails built into the Claude Code interface. It is
+an add-on for Claude Code users, not part of the skill; the skill never depends on it.
 
 ## Access
 
@@ -58,6 +62,8 @@ This installs into the current project by default. Add `--global` for a user-wid
 /plugin install sprc-slurm@sprc-plugins
 /reload-plugins
 ```
+
+For the optional Claude Code-only extras, see [below](#claude-code-extra-sprc-slurm-mods).
 
 <details>
 <summary><b>Private-repo auto-update caveat</b> (worth two minutes)</summary>
@@ -128,6 +134,22 @@ It symlinks rather than copies, so edits to the clone propagate — but the clon
 re-run `./install.sh` if you move it. Restart your agent afterward, then look for `slurm` in its
 skill list.
 
+### Claude Code extra: `sprc-slurm-mods`
+
+**Claude Code only.** This plugin is a Claude Code mod, not a skill: codex, opencode and oh-my-pi
+ignore it, and nothing in the `slurm` skill relies on it. It is active only in sessions running
+on the sprc cluster, and silent anywhere else.
+
+```
+/plugin install sprc-slurm-mods@sprc-plugins
+/reload-plugins
+```
+
+You get a status line (`sprc ▸ 2/8 GPU free · you 1R 3PD · queue 31`), a `/sprc` pane with
+nodes, your jobs, logs and efficiency, tools that let Claude wait on or follow a job instead of
+polling `squeue`, a notice when a job you submitted ends, and guardrails for commands the
+cluster would reject. Details and settings: [its README](plugins/sprc-slurm-mods/README.md).
+
 ## Use it
 
 Ask your agent to run cluster work in plain language — *"get train.py running on the cluster for
@@ -155,6 +177,7 @@ capacity) is deliberately *not* hardcoded — the skill tells the agent to read 
 
 ```
 plugins/sprc-slurm/skills/slurm/   ← the skill (canonical source): SKILL.md, references/, assets/
+plugins/sprc-slurm-mods/           ← Claude Code-only mod (hooks/, tests/); not a skill
 .claude-plugin/marketplace.json    ← catalog for Claude Code + omp
 skills/slurm                       ← symlink → canonical, for `omp install github:…`
 package.json                       ← makes the repo an omp plugin

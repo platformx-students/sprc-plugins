@@ -2,7 +2,7 @@
 
 # AGENTS.md
 
-This repository distributes the lab's `slurm` Agent Skill across Claude Code, omp, opencode, and Codex. It keeps one canonical skill source plus the manifests, installer, and symlink needed by those clients.
+This repository distributes the lab's `slurm` Agent Skill across Claude Code, omp, opencode, and Codex. It keeps one canonical skill source plus the manifests, installer, and symlink needed by those clients. It also ships `sprc-slurm-mods`, an optional Claude Code-only mod (a plugin of function hooks), as a separate marketplace plugin.
 
 **Keep this file current:** update `AGENTS.md` in the same change whenever repository structure, contributor workflow, validation, installation, or invariants change.
 
@@ -14,6 +14,7 @@ This repository distributes the lab's `slurm` Agent Skill across Claude Code, om
 - `skills/slurm` must remain a relative symlink to that source.
 - Plugin/package manifests, `install.sh`, and `README.md` are integration surfaces; inspect all affected surfaces instead of relying on a duplicated file map here.
 - One skill source serves every supported client. Do not create client-specific copies.
+- `plugins/sprc-slurm-mods/` is the Claude Code-only mod. It is not a skill and is never linked by `install.sh`, `npx skills`, or `skills/`.
 
 ## Working Rules
 
@@ -24,6 +25,8 @@ This repository distributes the lab's `slurm` Agent Skill across Claude Code, om
 - Keep detailed facts in references and reusable job scripts in assets. Keep the main skill focused on agent decisions and actions.
 - Keep host-versus-worker placement and project-storage rules consistent across the skill, references, and job templates.
 - Keep `npx skills` installation source-based; do not add an npm wrapper or duplicate the canonical skill.
+- Keep the skill harness-neutral. The dependency between skill and mod is one-way: the mod may assume the skill, but the skill (`SKILL.md`, references, assets) must never mention or rely on the mod or its tools.
+- Never put mod code in `tools/`, `hooks/pre/`, or `hooks/post/`: oh-my-pi loads those from Claude plugins. Mod code lives in `hooks/hooks.json` + `hooks/*.ts(x)`, which omp ignores.
 
 ## Verification
 
@@ -34,8 +37,9 @@ This repository distributes the lab's `slurm` Agent Skill across Claude Code, om
 | Installer | Run `./install.sh` against a temporary directory and inspect the resulting link |
 | Skill layout | Confirm `readlink skills/slurm` still targets the canonical source |
 | `npx skills` discovery | `npx -y skills add . --list` |
+| The mod (`plugins/sprc-slurm-mods/`) | `claude plugin validate .` and `claude plugin test .` in that directory |
 
-There is no project-wide build or test suite unless the repository adds one. Do not invent infrastructure for a documentation-only change.
+Apart from the mod's own tests, there is no project-wide build or test suite. Do not invent infrastructure for a documentation-only change.
 
 ## Ask First
 
