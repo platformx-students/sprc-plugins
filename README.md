@@ -21,7 +21,7 @@ templates), so the same content works across Claude Code, codex, oh-my-pi, openc
 else that reads the format. It is deliberately harness-neutral and needs nothing else.
 
 There is also an optional, **Claude Code-only** plugin, [`sprc-slurm-mods`](#claude-code-extra-sprc-slurm-mods):
-a live cluster dashboard, job tracking and guardrails built into the Claude Code interface. It is
+it follows the jobs your agent submits and tells the agent once when they have ended, and adds job tools and guardrails. It is
 an add-on for Claude Code users, not part of the skill; the skill never depends on it.
 
 ## Access
@@ -145,10 +145,12 @@ on the sprc cluster, and silent anywhere else.
 /reload-plugins
 ```
 
-You get a status line (`sprc ▸ 2/8 GPU free · you 1R 3PD · queue 31`), a `/sprc` pane with
-nodes, your jobs, logs and efficiency, tools that let Claude wait on or follow a job instead of
-polling `squeue`, a notice when a job you submitted ends, and guardrails for commands the
-cluster would reject. Details and settings: [its README](plugins/sprc-slurm-mods/README.md).
+Every job your agent submits is followed, including job arrays and whole sweeps. When a batch has
+ended, the agent gets one short message: results, failures with their log paths, and right-sizing.
+An idle session is woken for it. You also get start/finish toasts, a status line
+(`sprc ▸ 4/8 GPU free · following 21 (3R 18PD) · queue 71`), job tools for Claude, and a few
+guardrails for commands that would fail silently. Details and settings:
+[its README](plugins/sprc-slurm-mods/README.md).
 
 ## Use it
 

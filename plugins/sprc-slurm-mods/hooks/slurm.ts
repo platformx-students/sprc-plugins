@@ -256,7 +256,7 @@ export async function fetchScontrol(run: Run, id: string): Promise<Record<string
   return f['JobId'] ? f : null
 }
 
-type SacctRow = Record<(typeof SACCT_COLUMNS)[number], string>
+type SacctRow = Record<string, string>
 const SACCT_COLUMNS = SACCT_FIELDS.split(',') as readonly string[]
 
 export function parseSacct(stdout: string): SacctRow[] {
@@ -267,74 +267,193 @@ export function parseSacct(stdout: string): SacctRow[] {
       const f = l.split('|')
       const row: Record<string, string> = {}
       SACCT_COLUMNS.forEach((c, i) => (row[c] = f[i] ?? ''))
-      return row as SacctRow
+      return row
     })
 }
 
-/** Builds the efficiency report from sacct rows of one job (allocation + steps). */
-export function buildReport(id: string, rows: readonly SacctRow[], endedAt: number): JobReport | null {
-  const main = rows.find(r => r['JobID'] === id) ?? rows.find(r => !r['JobID']!.includes('.'))
-  if (!main) return null
-  const elapsed = durationSeconds(main['Elapsed']!)
-  const limit = durationSeconds(main['Timelimit']!)
-  const cpus = Number(main['NCPUS']) || 0
-  const totalCpu = durationSeconds(main['TotalCPU']!)
-  const reqMemMb = memMb(main['ReqMem']!)
-  let maxRssMb = NaN
+/** "95605_3" / "95605_[3-200]" / "123+0" / "123.batch" -> "95605" / "95605" / "123" / "123" */
+export function parentId(id: string): string {
+  return /^\d+/.exec(id)?.[0] ?? id
+}
+
+/** "95605_[3-5,9]%4" -> 4 tasks; anything else -> 1 */
+function taskCount(id: string): number {
+  const m = /_\[([^\]]+)\]/.exec(id)
+  if (!m) return 1
+  let n = 0
+  for (const r of m[1]!.replace(/%\d+$/, '').split(',')) {
+    const [a, b] = r.split('-').map(Number)
+    n += b === undefined ? 1 : Math.max(1, b - a! + 1)
+  }
+  return n
+}
+
+type Task = {
+  id: string
+  name: string
+  user: string
+  state: string
+  exitCode: string
+  count: number
+  elapsed: number
+  limit: number
+  cpus: number
+  totalCpu: number
+  reqMemMb: number
+  maxRssMb: number
+  gpus: number
+}
+
+function tasksOf(rows: readonly SacctRow[]): Task[] {
+  const byTask = new Map<string, Task>()
   for (const r of rows) {
+    const jobId = r['JobID'] ?? ''
+    const taskId = jobId.split('.')[0]!
+    let t = byTask.get(taskId)
+    if (!jobId.includes('.')) {
+      const tres = parseTres(r['AllocTRES'] ?? '')
+      t = {
+        id: taskId,
+        name: r['JobName'] ?? '',
+        user: r['User'] ?? '',
+        state: (r['State'] ?? '').split(' ')[0]!,
+        exitCode: r['ExitCode'] ?? '',
+        count: taskCount(taskId),
+        elapsed: durationSeconds(r['Elapsed'] ?? ''),
+        limit: durationSeconds(r['Timelimit'] ?? ''),
+        cpus: Number(r['NCPUS']) || 0,
+        totalCpu: durationSeconds(r['TotalCPU'] ?? ''),
+        reqMemMb: memMb(r['ReqMem'] ?? ''),
+        maxRssMb: t?.maxRssMb ?? NaN,
+        gpus: Number(tres['gres/gpu'] ?? 0) || 0,
+      }
+      byTask.set(taskId, t)
+    }
     const v = memMb(r['MaxRSS'] ?? '')
     // 0 means the 30 s sampler never ran (a short job), not 0 bytes.
-    if (Number.isFinite(v) && v > 0 && !(maxRssMb >= v)) maxRssMb = v
+    if (Number.isFinite(v) && v > 0) {
+      if (!t) {
+        t = { id: taskId, maxRssMb: v } as Task
+        byTask.set(taskId, t)
+      } else if (!(t.maxRssMb >= v)) t.maxRssMb = v
+    }
   }
-  const tres = parseTres(main['AllocTRES'] ?? '')
-  const gpus = Number(tres['gres/gpu'] ?? 0) || 0
-  const state = (main['State'] ?? '').split(' ')[0]!
-  const cpuEff = elapsed > 0 && cpus > 0 && Number.isFinite(totalCpu) ? totalCpu / (elapsed * cpus) : undefined
+  return [...byTask.values()].filter(t => t.state !== undefined)
+}
+
+/** Right-sizing for the next submission, from what the job (or every task of it) used. */
+function advise(a: {
+  states: ReadonlySet<string>
+  elapsed: number
+  limit: number
+  cpus: number
+  cpuEff?: number
+  reqMemMb: number
+  maxRssMb: number
+  memEff?: number
+  timeEff?: number
+}): string[] {
+  const advice: string[] = []
+  // A job that ran under two minutes says little about what it needs.
+  const isMeasured = a.elapsed >= 120
+  if (a.states.has('OUT_OF_MEMORY') || (a.memEff !== undefined && a.memEff > 0.92)) {
+    const want = Math.ceil(((Number.isFinite(a.maxRssMb) ? a.maxRssMb : a.reqMemMb) * 1.5) / 1024)
+    advice.push(`memory was the limit: request --mem=${want}G`)
+  } else if (isMeasured && a.memEff !== undefined && a.memEff < 0.5 && a.reqMemMb >= 8192) {
+    advice.push(`peak mem ${formatMem(a.maxRssMb)} of ${formatMem(a.reqMemMb)}: --mem=${Math.max(4, Math.ceil((a.maxRssMb * 1.3) / 1024))}G is enough`)
+  }
+  if (a.states.has('TIMEOUT')) {
+    advice.push('hit its walltime: raise --time, or checkpoint and --requeue')
+  } else if (isMeasured && a.states.size === 1 && a.states.has('COMPLETED') && a.timeEff !== undefined && a.timeEff < 0.35 && a.limit >= 3600) {
+    advice.push(`ran ${formatDuration(a.elapsed)} of a ${formatDuration(a.limit)} limit: --time=${Math.ceil((a.elapsed * 1.5) / 900) * 15} backfills sooner`)
+  }
+  if (a.cpuEff !== undefined && a.cpuEff < 0.25 && a.cpus >= 8 && a.elapsed > 300) {
+    advice.push(`CPU use ${Math.round(a.cpuEff * 100)}% of ${a.cpus} cores: --cpus-per-task=${Math.max(2, Math.ceil(a.cpus * a.cpuEff * 1.5))} would do`)
+  }
+  return advice
+}
+
+/** The larger of two measurements, either of which may be NaN (unknown). */
+function most(a: number, b: number): number {
+  return Number.isNaN(a) ? b : Number.isNaN(b) ? a : Math.max(a, b)
+}
+
+/**
+ * One report for job `id` from its sacct rows: a plain job, or an array
+ * job summarised over all its tasks (state counts, the failures, and the
+ * peak use of any task, so the advice fits every task).
+ */
+export function buildReport(id: string, rows: readonly SacctRow[], endedAt: number): JobReport | null {
+  // A task id ("123_4") reports that task alone; a job id, all of its tasks.
+  const tasks = tasksOf(rows.filter(r => (id.includes('_') ? (r['JobID'] ?? '').split('.')[0] === id : parentId(r['JobID'] ?? '') === id)))
+  if (!tasks.length) return null
+  const counts: Record<string, number> = {}
+  let n = 0
+  let elapsed = NaN
+  let limit = NaN
+  let maxRssMb = NaN
+  let reqMemMb = NaN
+  let cpuUsed = 0
+  let cpuHeld = 0
+  for (const t of tasks) {
+    counts[t.state] = (counts[t.state] ?? 0) + t.count
+    n += t.count
+    elapsed = most(elapsed, t.elapsed)
+    limit = most(limit, t.limit)
+    maxRssMb = most(maxRssMb, t.maxRssMb)
+    reqMemMb = most(reqMemMb, t.reqMemMb)
+    if (t.elapsed > 0 && t.cpus > 0 && Number.isFinite(t.totalCpu)) {
+      cpuUsed += t.totalCpu
+      cpuHeld += t.elapsed * t.cpus
+    }
+  }
+  const first = tasks[0]!
+  const states = new Set(Object.keys(counts))
+  const failed = tasks.filter(t => isBad(t.state)).map(t => ({ id: t.id, state: t.state, exitCode: t.exitCode }))
+  const cpuEff = cpuHeld > 0 ? cpuUsed / cpuHeld : undefined
   const memEff = reqMemMb > 0 && Number.isFinite(maxRssMb) ? maxRssMb / reqMemMb : undefined
   const timeEff = limit > 0 && Number.isFinite(elapsed) ? elapsed / limit : undefined
-
-  const advice: string[] = []
-  if (state === 'OUT_OF_MEMORY' || (memEff !== undefined && memEff > 0.92)) {
-    const want = Math.ceil(((Number.isFinite(maxRssMb) ? maxRssMb : reqMemMb) * 1.5) / 1024)
-    advice.push(`memory was the limit: next time request --mem=${want}G`)
-  } else if (memEff !== undefined && memEff < 0.5 && reqMemMb >= 8192) {
-    const want = Math.max(4, Math.ceil((maxRssMb * 1.3) / 1024))
-    advice.push(`peak memory ${formatMem(maxRssMb)} of ${formatMem(reqMemMb)} requested: --mem=${want}G is enough`)
-  }
-  if (state === 'TIMEOUT') {
-    advice.push('hit its walltime: raise --time, or checkpoint and use --requeue so it resumes')
-  } else if (state === 'COMPLETED' && timeEff !== undefined && timeEff < 0.35 && limit >= 3600) {
-    const want = Math.ceil((elapsed * 1.5) / 900) * 15 // round up to 15 min
-    advice.push(`ran ${formatDuration(elapsed)} of a ${formatDuration(limit)} limit: --time=${want} backfills sooner`)
-  }
-  if (cpuEff !== undefined && cpuEff < 0.25 && cpus >= 8 && elapsed > 300) {
-    const want = Math.max(2, Math.ceil(cpus * cpuEff * 1.5))
-    advice.push(`CPU use ${Math.round(cpuEff * 100)}% of ${cpus} cores: --cpus-per-task=${want} would do`)
-  }
-
   return {
     id,
-    name: main['JobName'] ?? '',
-    user: main['User'] || undefined,
-    state,
-    exitCode: main['ExitCode'] ?? '',
-    elapsed: main['Elapsed'] ?? '',
-    limit: main['Timelimit'] ?? '',
-    nodes: main['NodeList'] ?? '',
-    cpus,
-    gpus,
-    reqMem: Number.isFinite(reqMemMb) ? formatMem(reqMemMb) : main['ReqMem'] ?? '?',
+    name: first.name,
+    user: first.user || undefined,
+    state: states.size === 1 ? first.state : 'MIXED',
+    counts,
+    tasks: n,
+    isArray: tasks.some(t => t.id.includes('_')),
+    failed: failed.slice(0, 10),
+    exitCode: first.exitCode,
+    elapsed: formatDuration(elapsed),
+    elapsedS: elapsed,
+    limit: formatDuration(limit),
+    cpus: first.cpus,
+    gpus: first.gpus,
+    reqMem: formatMem(reqMemMb),
     maxRss: Number.isFinite(maxRssMb) ? formatMem(maxRssMb) : '?',
     cpuEff,
     memEff,
     timeEff,
-    advice,
+    advice: advise({ states, elapsed, limit, cpus: first.cpus, cpuEff, reqMemMb, maxRssMb, memEff, timeEff }),
     endedAt,
   }
 }
 
-export async function fetchReport(run: Run, id: string, now: number): Promise<JobReport | null> {
+/** Reports for several jobs from one sacct call; a job sacct has not finished recording is left out. */
+export async function fetchReports(run: Run, ids: readonly string[], now: number): Promise<Map<string, JobReport>> {
+  const out = new Map<string, JobReport>()
+  if (!ids.length) return out
   // Text sacct, not --json: --json omits mem-used on this cluster.
+  const r = await run(['sacct', '-j', ids.join(','), '-n', '-P', '-o', SACCT_FIELDS])
+  if (r.exitCode !== 0) return out
+  const rows = parseSacct(r.stdout)
+  for (const id of ids) {
+    const report = buildReport(parentId(id), rows, now)
+    if (report && Object.keys(report.counts).every(s => TERMINAL_STATES.has(s))) out.set(report.id, report)
+  }
+  return out
+}
+
+export async function fetchReport(run: Run, id: string, now: number): Promise<JobReport | null> {
   const r = await run(['sacct', '-j', id, '-n', '-P', '-o', SACCT_FIELDS])
   if (r.exitCode !== 0) return null
   return buildReport(id, parseSacct(r.stdout), now)
@@ -367,11 +486,75 @@ export function pct(x: number | undefined): string {
   return x === undefined ? '–' : `${Math.round(x * 100)}%`
 }
 
+/** "85353,85354,85355,85360" -> "85353–85355, 85360" */
+export function idRanges(ids: readonly string[]): string {
+  const nums = [...new Set(ids)].map(Number).sort((a, b) => a - b)
+  const out: string[] = []
+  for (let i = 0; i < nums.length; ) {
+    let j = i
+    while (j + 1 < nums.length && nums[j + 1] === nums[j]! + 1) j++
+    out.push(j > i ? `${nums[i]}–${nums[j]}` : String(nums[i]))
+    i = j + 1
+  }
+  return out.join(', ')
+}
+
+function countsText(counts: Record<string, number>): string {
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([s, n]) => `${n} ${s}`)
+    .join(', ')
+}
+
+function useText(r: JobReport): string {
+  // Under two minutes the samples say nothing worth the tokens.
+  if (!(r.elapsedS >= 120)) return ''
+  return [
+    r.memEff !== undefined ? `peak mem ${r.maxRss}/${r.reqMem}` : '',
+    r.cpuEff !== undefined && r.cpus ? `CPU ${pct(r.cpuEff)} of ${r.cpus}` : '',
+    r.timeEff !== undefined ? `${pct(r.timeEff)} of ${r.limit} limit` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/** One line for one job: `job 85353 "train" COMPLETED in 12m · peak mem 3G/16G · ...` */
 export function reportLine(r: JobReport): string {
-  const eff = [
-    r.cpuEff !== undefined ? `CPU ${pct(r.cpuEff)}` : '',
-    r.memEff !== undefined ? `mem ${r.maxRss}/${r.reqMem} (${pct(r.memEff)})` : '',
-    r.timeEff !== undefined ? `time ${pct(r.timeEff)} of limit` : '',
-  ].filter(Boolean)
-  return `job ${r.id} (${r.name}) ${r.state} exit ${r.exitCode} after ${r.elapsed}${eff.length ? ' · ' + eff.join(' · ') : ''}`
+  const what = r.isArray ? `array ${r.id} "${r.name}" (${r.tasks} tasks: ${countsText(r.counts)})` : `job ${r.id} "${r.name}" ${r.state}`
+  const exit = !r.isArray && isBad(r.state) ? ` exit ${r.exitCode}` : ''
+  const use = useText(r)
+  return `${what}${exit} ${r.isArray ? 'longest' : 'in'} ${r.elapsed}${use ? ` · ${use}` : ''}`
+}
+
+export type FailedLog = { id: string; path: string }
+
+/**
+ * The message for a set of jobs that have all ended: one line per job up to
+ * a few, then counts; failures with their log; advice not already given.
+ */
+export function endMessage(reports: readonly JobReport[], logs: readonly FailedLog[], seenAdvice: Set<string>): string {
+  const lines: string[] = []
+  const bad = reports.filter(r => r.failed.length > 0)
+  if (reports.length <= 3) {
+    lines.push(`[sprc] Ended: ${reports.map(reportLine).join('\n  ')}`)
+  } else {
+    const counts: Record<string, number> = {}
+    for (const r of reports) for (const [s, n] of Object.entries(r.counts)) counts[s] = (counts[s] ?? 0) + n
+    const longest = Math.max(...reports.map(r => r.elapsedS).filter(Number.isFinite))
+    lines.push(`[sprc] ${reports.length} jobs ended (${idRanges(reports.map(r => r.id))}): ${countsText(counts)}; longest ${formatDuration(longest)}.`)
+    for (const r of bad.slice(0, 5)) lines.push(`  ${reportLine(r)}`)
+    if (bad.length > 5) lines.push(`  … ${bad.length - 5} more with failures: ${idRanges(bad.slice(5).map(r => r.id))}`)
+  }
+  const failedTasks = bad.flatMap(r => r.failed)
+  if (failedTasks.length) {
+    const shown = failedTasks.slice(0, 5).map(t => {
+      const log = logs.find(l => l.id === t.id || l.id === parentId(t.id))
+      return `${t.id} ${t.state} exit ${t.exitCode}${log ? ` log ${log.path}` : ''}`
+    })
+    lines.push(`  Failed: ${shown.join('; ')}${failedTasks.length > 5 ? `; +${failedTasks.length - 5} more` : ''}`)
+  }
+  const advice = [...new Set(reports.flatMap(r => r.advice))].filter(a => !seenAdvice.has(a))
+  for (const a of advice) seenAdvice.add(a)
+  if (advice.length) lines.push(`  Right-sizing: ${advice.slice(0, 3).join('; ')}`)
+  return lines.join('\n')
 }

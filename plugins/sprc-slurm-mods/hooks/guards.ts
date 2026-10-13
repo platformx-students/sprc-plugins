@@ -1,12 +1,13 @@
 // Checks on Bash commands before they run. Pure: the hook passes in what it
 // knows about the session and the cluster.
 //
-// `reject` findings are things the cluster itself would refuse or that
-// silently break (so blocking them never costs a working command).
-// `nudge` findings are wasteful patterns with a better path in this mod.
+// `reject` findings are commands that would silently break or hurt other
+// users, and that Slurm itself does not refuse: blocking them never costs a
+// working command. Anything Slurm refuses on its own (interactive scavenger,
+// say) is left to Slurm, whose message stays in step with the policy.
 // `note` findings never block; they ride along as context for the model.
 
-export type Finding = { level: 'reject' | 'nudge' | 'note'; rule: string; message: string }
+export type Finding = { level: 'reject' | 'note'; rule: string; message: string }
 
 export type GuardContext = {
   /** The session's working directory, where a bare command runs; '' = unknown. */
@@ -15,8 +16,11 @@ export type GuardContext = {
   allocatedNodes: ReadonlySet<string> | null
   /** True when the session runs on the login node (sprlab005). */
   isLoginNode: boolean
-  /** Name of the wait tool to point at. */
-  waitTool: string
+  /**
+   * The text of batch scripts the hook could read, by the path as written in
+   * the command; a script's own `#SBATCH --chdir` settles where it runs.
+   */
+  scripts?: ReadonlyMap<string, string>
 }
 
 /** Splits a command line into simple commands on ;, &&, ||, |, newlines. Quote-aware. */
@@ -64,13 +68,13 @@ export function segments(command: string): string[][] {
   return out
 }
 
-/** Drops leading VAR=value assignments and wrappers like `env`, `time`, `nohup`. */
+/** Drops leading VAR=value assignments, wrappers like `env`, `time`, `nohup`, and shell keywords (`do`, `then`). */
 function head(words: readonly string[]): string[] {
   let i = 0
   while (i < words.length) {
     const w = words[i]!
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) i++
-    else if (w === 'env' || w === 'time' || w === 'nohup' || w === 'exec' || w === 'command') i++
+    else if (/^(env|time|nohup|exec|command|do|then|else|elif|if|while|until|!|\{)$/.test(w)) i++
     else break
   }
   return words.slice(i)
@@ -92,6 +96,42 @@ function option(words: readonly string[], long: string, short?: string): string 
   return undefined
 }
 
+// sbatch options that take no value; any other short option takes the next word.
+const SBATCH_FLAGS = /^(--parsable|--wait|-W|--hold|-H|--requeue|--no-requeue|--test-only|--exclusive|--quiet|-Q|--verbose|-v+|--overcommit|-O|--contiguous|--spread-job|--use-min-nodes|--ignore-pbs|--get-user-env|--export-file|--no-kill|-k|--oversubscribe|-s)$/
+
+/** The batch script an sbatch command line names, or undefined (none, or --wrap). */
+export function sbatchScript(words: readonly string[]): string | undefined {
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i]!
+    if (w === '--wrap' || w.startsWith('--wrap=')) return undefined
+    if (w.startsWith('--')) {
+      if (!w.includes('=') && !SBATCH_FLAGS.test(w)) i++
+      continue
+    }
+    if (w.startsWith('-') && w.length > 1) {
+      if (w.length === 2 && !SBATCH_FLAGS.test(w)) i++
+      continue
+    }
+    return w
+  }
+  return undefined
+}
+
+/** An `#SBATCH` directive's value from a script's header. */
+function directive(text: string | undefined, long: string, short: string): string | undefined {
+  if (!text) return undefined
+  for (const line of text.split('\n')) {
+    if (line.startsWith('#!') || !line.trim()) continue
+    if (!line.startsWith('#')) break // directives end at the first command
+    const m = /^#SBATCH\s+(.*)$/.exec(line)
+    if (m) {
+      const v = option(m[1]!.trim().split(/\s+/), long, short)
+      if (v !== undefined) return v
+    }
+  }
+  return undefined
+}
+
 const HEAVY = /^(torchrun|deepspeed|accelerate|vllm|sglang|python[\d.]*)$/
 const SCRATCH_DIRS = /^\/(tmp|var\/tmp|dev\/shm)(\/|$)/
 
@@ -108,19 +148,9 @@ export function checkBash(command: string, ctx: GuardContext): Finding[] {
     // A relative, ~ or $VAR target is not resolved here: the directory becomes unknown.
     if (cmd === 'cd' || cmd === 'pushd') cwd = words[1]?.startsWith('/') ? words[1] : ''
 
-    if (cmd === 'salloc' || cmd === 'srun') {
-      const qos = option(words, 'qos', 'q')
-      if (qos === 'scavenger') {
-        findings.push({
-          level: 'reject',
-          rule: 'scavenger-interactive',
-          message: `${cmd} --qos=scavenger is rejected on sprc: scavenger is batch-only. Submit it with sbatch --qos=scavenger (and make it checkpoint/requeue), or use the default QoS for an interactive session.`,
-        })
-      }
-    }
-
     if (cmd === 'sbatch') {
-      const chdir = option(words, 'chdir', 'D')
+      const script = sbatchScript(words)
+      const chdir = option(words, 'chdir', 'D') ?? (script !== undefined ? directive(ctx.scripts?.get(script), 'chdir', 'D') : undefined)
       const workdir = chdir ? (chdir.startsWith('/') ? chdir : '') : cwd
       if (workdir && SCRATCH_DIRS.test(workdir)) {
         findings.push({
@@ -172,30 +202,39 @@ export function checkBash(command: string, ctx: GuardContext): Finding[] {
     }
   }
 
-  // Sleep-and-poll loops burn turns and tokens; the wait tool blocks once.
-  const text = command.replace(/\s+/g, ' ')
-  const polls = /\b(squeue|sacct|scontrol)\b/.test(text)
-  const sleeps = /\bsleep\s+\d+/.test(text) || /\bwatch\b/.test(text)
-  const loops = /\b(while|until|for)\b/.test(text) || /\bwatch\b/.test(text)
-  if (polls && sleeps && loops) {
-    findings.push({
-      level: 'nudge',
-      rule: 'poll-loop',
-      message: `Don't poll Slurm in a sleep loop. Call ${ctx.waitTool} with the job id: it waits (up to 10 min per call) and returns when the job changes state. To be told when a long job finishes, call sprc_follow instead and stop.`,
-    })
-  }
-
   return findings
 }
 
 /**
- * Job ids a Bash result announced ("Submitted batch job 123", "Granted job
- * allocation 123", or a bare "123" / "123;cluster" line from sbatch --parsable).
+ * The batch scripts a command line submits, each with the path to read it
+ * at (following `cd` to absolute directories; '' where it cannot tell).
+ */
+export function sbatchScripts(command: string, cwd: string): { script: string; path: string }[] {
+  const out: { script: string; path: string }[] = []
+  for (const seg of segments(command)) {
+    const words = head(seg)
+    const cmd = base(words[0])
+    if (cmd === 'cd' || cmd === 'pushd') cwd = words[1]?.startsWith('/') ? words[1] : ''
+    if (cmd !== 'sbatch') continue
+    const script = sbatchScript(words)
+    if (script === undefined) continue
+    out.push({ script, path: script.startsWith('/') ? script : cwd && !/^[~$]/.test(script) ? `${cwd}/${script}` : '' })
+  }
+  return out
+}
+
+/** Whether a command line runs sbatch (also inside `$( )`, a loop or a pipeline). */
+export function runsSbatch(command: string): boolean {
+  return segments(command).some(words => base(head(words)[0]) === 'sbatch') || /`\s*sbatch\b/.test(command)
+}
+
+/**
+ * Job ids a Bash result announced: "Submitted batch job 123", or a bare
+ * "123" / "123;cluster" line from sbatch --parsable.
  */
 export function submittedJobs(output: string, isParsable = false): string[] {
   const ids = new Set<string>()
   if (isParsable) for (const m of output.matchAll(/^(\d+)(?:;\S+)?$/gm)) ids.add(m[1]!)
   for (const m of output.matchAll(/Submitted batch job (\d+)/g)) ids.add(m[1]!)
-  for (const m of output.matchAll(/Granted job allocation (\d+)/g)) ids.add(m[1]!)
   return [...ids]
 }

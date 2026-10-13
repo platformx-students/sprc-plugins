@@ -1,13 +1,15 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { checkBash, segments, submittedJobs } from '../hooks/guards'
+import { checkBash, runsSbatch, sbatchScript, sbatchScripts, segments, submittedJobs } from '../hooks/guards'
 import type { GuardContext } from '../hooks/guards'
 import {
   buildReport,
   durationSeconds,
+  endMessage,
   expandNodes,
   gpuTotals,
   hasJob,
+  idRanges,
   parseSacct,
   parseScontrol,
   parseSinfo,
@@ -18,15 +20,13 @@ const ctx: GuardContext = {
   cwd: '/home/me/proj',
   allocatedNodes: new Set(['sprc02']),
   isLoginNode: true,
-  waitTool: 'mcp__sprc-slurm-mods__sprc_wait',
 }
 const rules = (cmd: string, c = ctx) => checkBash(cmd, c).map(f => f.rule)
 
 describe('guards', () => {
-  test('scavenger is batch-only', () => {
-    expect(rules('salloc --qos=scavenger --gpus=1')).toEqual(['scavenger-interactive'])
-    expect(rules('srun -q scavenger --pty bash')).toEqual(['scavenger-interactive'])
-    expect(rules('sbatch --qos=scavenger job.sbatch')).toEqual([])
+  test('what Slurm refuses itself is left to Slurm', () => {
+    expect(rules('salloc --qos=scavenger --gpus=1')).toEqual([])
+    expect(rules('srun -q scavenger --pty bash')).toEqual([])
   })
   test('sbatch from node-local scratch', () => {
     expect(rules('cd /tmp/x && sbatch job.sbatch')).toEqual(['sbatch-from-tmp'])
@@ -37,6 +37,19 @@ describe('guards', () => {
     expect(rules('cd ~/proj && sbatch job.sbatch', { ...ctx, cwd: '/tmp/x' })).toEqual([])
     expect(rules('cd $HOME && sbatch job.sbatch', { ...ctx, cwd: '/tmp/x' })).toEqual([])
     expect(rules('sbatch -D out job.sbatch', { ...ctx, cwd: '/tmp/x' })).toEqual([])
+    // The script's own #SBATCH --chdir decides.
+    const scripts = new Map([['job.sbatch', '#!/bin/bash\n#SBATCH --gpus=1\n#SBATCH --chdir=/home/me/proj\npython x.py\n']])
+    expect(rules('sbatch job.sbatch', { ...ctx, cwd: '/tmp', scripts })).toEqual([])
+    const tmp = new Map([['job.sbatch', '#!/bin/bash\n#SBATCH -D /tmp/y\n']])
+    expect(rules('sbatch job.sbatch', { ...ctx, cwd: '/home/me', scripts: tmp })).toEqual(['sbatch-from-tmp'])
+  })
+  test('which script sbatch submits', () => {
+    expect(sbatchScript(['sbatch', '--parsable', '-p', 'main', '--gpus=1', 'job.sh', 'arg'])).toBe('job.sh')
+    expect(sbatchScript(['sbatch', '--wrap', 'echo hi'])).toBe(undefined)
+    expect(sbatchScripts('cd /home/me/p && sbatch -J x run.sh', '/tmp')).toEqual([{ script: 'run.sh', path: '/home/me/p/run.sh' }])
+    expect(runsSbatch('JID=$(sbatch --parsable job.sh)')).toBe(true)
+    expect(runsSbatch('for i in 1 2; do sbatch j.sh $i; done')).toBe(true)
+    expect(runsSbatch('grep sbatch notes.md')).toBe(false)
   })
   test('ssh needs an allocation on that node', () => {
     expect(rules('ssh sprc01 nvidia-smi')).toEqual(['ssh-without-allocation'])
@@ -53,10 +66,9 @@ describe('guards', () => {
     expect(rules('accelerate config')).toEqual([])
     expect(rules('torchrun train.py', { ...ctx, isLoginNode: false })).toEqual([])
   })
-  test('poll loops and sacct --json', () => {
-    expect(rules('while squeue -j 5 | grep -q 5; do sleep 30; done')).toEqual(['poll-loop'])
-    expect(rules('watch -n 10 squeue --me')).toEqual(['poll-loop'])
-    expect(rules('squeue --me; sleep 5')).toEqual([])
+  test('poll loops run; sacct --json gets a note', () => {
+    expect(rules('while squeue -j 5 | grep -q 5; do sleep 30; done')).toEqual([])
+    expect(rules('watch -n 10 squeue --me')).toEqual([])
     expect(rules('sacct -j 5 --json')).toEqual(['sacct-json-mem'])
   })
   test('quoting and comments', () => {
@@ -64,7 +76,6 @@ describe('guards', () => {
   })
   test('submitted job ids', () => {
     expect(submittedJobs('Submitted batch job 123\nSubmitted batch job 124')).toEqual(['123', '124'])
-    expect(submittedJobs('salloc: Granted job allocation 77')).toEqual(['77'])
     expect(submittedJobs('82335\n', true)).toEqual(['82335'])
     expect(submittedJobs('82335;sprc\n', true)).toEqual(['82335'])
     expect(submittedJobs('82335\n')).toEqual([])
@@ -111,6 +122,7 @@ describe('parsers', () => {
     )
     const r = buildReport('9', rows, 0)!
     expect(r.gpus).toBe(1)
+    expect(r.isArray).toBe(false)
     expect(Math.round((r.memEff ?? 0) * 100)).toBe(9)
     expect(r.advice.length).toBe(3) // mem, time, cpu
     expect(r.advice[0]).toContain('--mem=8G')
@@ -137,5 +149,33 @@ describe('parsers', () => {
   test('OOM asks for more memory', () => {
     const rows = parseSacct('9|t|OUT_OF_MEMORY|0:125|00:01:00|01:00:00|4|00:03:00|8G|8100M|cpu=4,mem=8G|x|sprc01\n')
     expect(buildReport('9', rows, 0)!.advice[0]).toContain('--mem=12G')
+  })
+  test('a job of seconds gets no right-sizing', () => {
+    const r = buildReport('9', parseSacct('9|t|COMPLETED|0:0|00:00:05|01:00:00|4|00:00:04|47G|1M|cpu=4,mem=47G|x|sprc00|me\n'), 0)!
+    expect(r.advice).toEqual([])
+  })
+  test('array reports count tasks, including never-started ranges', () => {
+    const rows = parseSacct(
+      '7_1|a|COMPLETED|0:0|00:05:00|01:00:00|4|00:10:00|8G||cpu=4,mem=8G|x|sprc00|me\n' +
+        '7_1.batch|batch|COMPLETED|0:0|00:05:00||4|00:10:00||2000M|cpu=4|x|sprc00|\n' +
+        '7_2|a|FAILED|2:0|00:01:00|01:00:00|4|00:01:00|8G||cpu=4,mem=8G|x|sprc00|me\n' +
+        '7_[3-6]|a|CANCELLED by 1|0:0|00:00:00|01:00:00|4|00:00:00|8G||cpu=4,mem=8G||None assigned|me\n',
+    )
+    const r = buildReport('7', rows, 0)!
+    expect(r.tasks).toBe(6)
+    expect(r.counts).toEqual({ COMPLETED: 1, FAILED: 1, CANCELLED: 4 })
+    expect(r.state).toBe('MIXED')
+    expect(r.failed.map(t => t.id)).toEqual(['7_2', '7_[3-6]'])
+    expect(r.maxRss).toBe('2.0G')
+    expect(buildReport('7_2', rows, 0)!.state).toBe('FAILED')
+  })
+  test('end messages stay short and give advice once', () => {
+    const one = (id: string) => buildReport(id, parseSacct(`${id}|run|COMPLETED|0:0|00:20:00|04:00:00|16|01:00:00|64G|6000M|cpu=16,mem=64G|x|sprc01|me\n`), 0)!
+    const seen = new Set<string>()
+    const msg = endMessage(['1', '2', '3', '4', '5'].map(one), [], seen)
+    expect(msg.split('\n').length).toBe(2)
+    expect(msg).toContain('5 jobs ended (1–5): 5 COMPLETED')
+    expect(endMessage([one('6')], [], seen)).not.toContain('Right-sizing')
+    expect(idRanges(['5', '3', '4', '9'])).toBe('3–5, 9')
   })
 })

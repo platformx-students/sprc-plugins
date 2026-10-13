@@ -1,8 +1,10 @@
 {
   "name": "sprc-slurm-mods",
-  "version": "0.1.0",
-  "description": "Claude Code mod for the sprc Slurm cluster: a live cluster/job dashboard pane, status line, job lifecycle tools, finish notifications and submit guardrails.",
-  "author": { "name": "Max Bromberg" },
+  "version": "0.2.0",
+  "description": "Claude Code mod for the sprc Slurm cluster: follows the jobs you submit and tells the agent once when they end (results, failures, right-sizing), job tools, a status line, and submit guardrails.",
+  "author": {
+    "name": "Max Bromberg"
+  },
   "types": "./types/index.d.ts",
   "userConfig": {
     "pollSeconds": {
@@ -11,17 +13,21 @@
       "description": "How often to refresh cluster and job state from Slurm. Minimum 10.",
       "default": 30
     },
-    "autoOpen": {
+    "wake": {
       "type": "boolean",
-      "title": "Open the dashboard at session start",
-      "description": "Open the sprc pane beside the chat when a session starts (only placed on wide terminals).",
+      "title": "Wake the session when followed jobs end",
+      "description": "When the jobs a conversation followed have all ended and it is idle, start a turn with their results. Off: the results wait for your next prompt (a toast still shows).",
       "default": true
     },
     "guards": {
       "type": "string",
       "title": "Submit guardrails",
-      "description": "enforce: block commands Slurm or the cluster would reject, and sleep/squeue polling loops; warn: let them run but tell the model; off: no checks (submitted jobs are still followed).",
-      "options": ["enforce", "warn", "off"],
+      "description": "enforce: block the few commands that would silently break or burden the login node (sbatch from node-local /tmp, GPU launchers on sprlab005); warn: let them run but tell the model; off: no checks. Jobs are followed either way.",
+      "options": [
+        "enforce",
+        "warn",
+        "off"
+      ],
       "default": "enforce"
     },
     "liveContext": {
