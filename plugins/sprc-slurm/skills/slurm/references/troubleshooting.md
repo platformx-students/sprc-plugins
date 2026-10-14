@@ -22,10 +22,10 @@ Always **read the actual reason before changing flags**. Get it from:
 | Message | Cause | Fix |
 |---|---|---|
 | `Invalid account or account/partition combination` | User not onboarded (no association), or `-p`/account mismatch. | If `sacctmgr show assoc where user=$USER` is empty → they need a cluster account: send them to the Sprocket portal (`/no-account` once signed in). Otherwise check the partition name. |
-| `Invalid qos specification` | Requested a QoS the user doesn't hold. | Drop `--qos` and proceed on the default. For `expedite`, it must be granted first — request it at the portal's `/requests`. |
+| `Invalid qos specification` | Requested a QoS the user doesn't hold. | Drop `--qos` and proceed on the default. For `expedite`, it must be granted first — request it at the portal's `/work-requests`. |
 | `Interactive sessions are limited to the 'debug' partition ...` | An interactive `salloc`/`srun` explicitly asked for a non-`debug` partition (e.g. `-p main`). `job_submit.lua` rejects it. | Drop `-p` (interactive auto-routes to `debug`), or — if the work needs > 1 h — make it an `sbatch` job on `main`. |
 | `scavenger is a batch/best-effort tier and cannot run interactively ...` | An interactive `salloc --qos=scavenger`. | Submit it as `sbatch --qos=scavenger` instead. |
-| `Requested time limit ... exceeds ... limit` | `--time` over the QoS/partition cap (batch). `EnforcePartLimits=ALL` rejects it at submit rather than holding it. | Lower it, or move to a higher-cap QoS. |
+| `Requested time limit ... exceeds ... limit` | `--time` over the partition cap (batch). `EnforcePartLimits=ALL` rejects it at submit rather than holding it. Over a research QoS wall cap the job is accepted and pends with `QOSMaxWallDurationPerJobLimit` instead. | Lower it, or move to a higher-cap QoS. |
 | `Requested GRES option unsupported` / bad `--gres` | Typo in the GRES spec. | Use `--gres=gpu:N` (or `--gpus=N`). The GRES name is `gpu` (type `h100_nvl`). |
 | `Access/permission denied` on `ssh sprcNN` | No allocation on that node (`pam_slurm_adopt`). | `salloc` first, confirm the node in `squeue --me`, then `ssh`. |
 

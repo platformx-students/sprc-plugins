@@ -2,7 +2,8 @@
 
 Quote limits/defaults from here, not from memory. Verify against the live controller when it matters
 (`scontrol show config`, `sacctmgr show qos`, `scontrol show node`, `scontrol show partition`) —
-config drifts from any snapshot. Last verified against the live controller **2026-08-30**.
+config drifts from any snapshot. Last verified against the live controller **2026-08-30**; host
+per-user caps and QoS priorities re-checked **2026-10-13**.
 
 ## Hardware
 
@@ -24,15 +25,15 @@ A systemd per-user slice caps every user; the installed hardware is not a worklo
 | Limit | Value |
 |---|---|
 | CPU | `CPUQuota=800%` → **8 vCPUs** |
-| Memory (soft throttle) | `MemoryHigh=24G` |
-| Memory (hard kill) | `MemoryMax=32G` |
-| Swap | `MemorySwapMax=8G` |
+| Memory (hard kill) | `MemoryMax=10G` (no per-user `MemoryHigh` throttle) |
+| Swap | `MemorySwapMax=500M` |
 | Processes | `TasksMax=4096` |
 
 Admin accounts (root, exx, mgmt) are exempt. Light work is fine when it needs no GPU, stays around
 8 GB RAM or less, and each compute command takes around 2 minutes or less. Everything heavier belongs
-on `sprc[00-03]` through Slurm. A build or dataloader dying around 32 GB on the host is hitting the
-hard cap, not an application bug. Downloads and file staging normally run on `sprlab005`, where the
+on `sprc[00-03]` through Slurm. A build or dataloader killed around 10 GB on the host is hitting the
+hard cap, not an application bug. `systemctl show user-$(id -u).slice -p MemoryMax -p MemorySwapMax`
+reads the caps in force. Downloads and file staging normally run on `sprlab005`, where the
 slower storage tiers are directly attached.
 
 ## Slurm CPU vs. physical core
@@ -60,8 +61,10 @@ Note: a node can't *default*-pack all 128 CPUs at 12 GB each (would need 1,536,0
 RealMemory). Never bites in practice because realistic packing is GPU-bound. For big CPU-only jobs
 set `--mem` explicitly.
 
-`EnforcePartLimits=ALL`: a request over the partition/QoS limit is **rejected at submit**, not held
-pending. `OverTimeLimit=0` and `KillWait=30` — a job is killed at its limit, with 30 s between
+`EnforcePartLimits=ALL`: a request over a **partition** limit is **rejected at submit**. A request
+over a research QoS wall limit (`undergrad`, `expedite` and `scavenger` allow 1 day, below `main`'s
+3) is accepted and pends with `QOSMaxWallDurationPerJobLimit`, so lower `--time` rather than wait.
+`OverTimeLimit=0` and `KillWait=30` — a job is killed at its limit, with 30 s between
 `SIGTERM` and `SIGKILL`.
 
 ## Storage — which paths the compute nodes can actually see
@@ -139,8 +142,10 @@ A user must be added to one of these accounts (`sacctmgr add user`) before they 
 
 The same four nodes also carry a course. Three facts about it affect how research jobs schedule:
 
-1. **Course tiers rank below every research tier** in the queue, and they are not in `debug` at all
-   (`debug` is restricted to the research accounts). A course job never outranks yours.
+1. **Course tiers rank below every research tier except `scavenger`** in the queue, and they are
+   not in `debug` at all (`debug` is restricted to the research accounts). A course job never
+   outranks a `normal`, `undergrad` or `expedite` job; it does outrank a `scavenger` one, though it
+   cannot preempt it.
 2. **No new preemption.** `scavenger` is still the only thing ever preempted, still by REQUEUE. The
    course policy added no preemption path that can touch a research job.
 3. **Standing reservations hold a slice of the cluster** for the course on a recurring weekday/weekend

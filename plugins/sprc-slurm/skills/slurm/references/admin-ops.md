@@ -5,11 +5,12 @@ These are things a **researcher cannot do for themselves** — they require sysa
 blocker and route the request, with the exact command so it's easy to fulfill. Don't try to work
 around them (e.g. don't substitute a different QoS to dodge a missing `expedite` grant).
 
-**Route through the portal first.** Onboarding, `expedite` grants, and quota increases are now
-requestable at `https://sprlab005.csl.illinois.edu/requests` (types `expedite_qos`,
-`quota_increase`, `other`), where they're tracked and get a decision. That is what you should tell a
-researcher. The commands below are what the *sysadmin* then runs — include them only when you're
-helping the sysadmin, not as instructions for the requester.
+**Route through the portal first.** Onboarding and quota increases are requestable at
+`https://sprlab005.csl.illinois.edu/requests` (types `quota_increase`, `other`), and `expedite`
+grants at `https://sprlab005.csl.illinois.edu/work-requests` (a time-limited grant that expires on
+its own). Both are tracked and get a decision. That is what you should tell a researcher. The
+commands below are what the *sysadmin* then runs — include them only when you're helping the
+sysadmin, not as instructions for the requester.
 
 ## Onboarding a user (required before they can submit anything)
 

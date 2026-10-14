@@ -25,8 +25,8 @@ The agent may already be running on `sprlab005`. That makes it convenient, not a
 | `sprlab005` | Host, login, controller, accounting, directly attached storage | Editing, Git, downloads and file staging, submission/monitoring, formatting, lint, small static analysis, targeted tests, small incremental builds |
 | `sprc00`–`sprc03` | Slurm compute workers | GPU work, commands over ~2 minutes, work over ~8 GB RAM, large builds/tests, preprocessing, analytics, simulation, training, inference, serving |
 
-`sprlab005` has 128 GB installed RAM (about 125 GiB visible), but each user is capped at 8 GB swap,
-8 vCPUs, and 32 GB RAM. It also runs the cluster control services; installed capacity is not a
+`sprlab005` has 128 GB installed RAM (about 125 GiB visible), but each user is capped at 8 vCPUs,
+10 GB RAM and 500 MB swap. It also runs the cluster control services; installed capacity is not a
 workload budget.
 
 Run work directly on `sprlab005` only when it needs no GPU, should use no more than roughly 8 GB of
@@ -75,8 +75,9 @@ This posture is the point of the skill. Everything below is what you need to act
 These are the things a generic Slurm answer gets wrong here. Get them right silently.
 
 - **The host ceiling is not a workload budget.** A systemd slice caps every user on `sprlab005` at
-  **8 vCPUs and 32 GB RAM**; the routing rule above deliberately moves work well before that hard
-  limit. A build or dataloader dying around 32 GB there is hitting the cap, not an application bug.
+  **8 vCPUs and 10 GB RAM** (500 MB swap); the routing rule above deliberately moves work before that
+  hard limit. A build or dataloader killed around 10 GB there is hitting the cap, not an application
+  bug. `systemctl show user-$(id -u).slice -p MemoryMax` reads the cap in force.
 - **No GPU unless you ask.** Add `--gres=gpu:N` (or `--gpus=N`) and request the fewest GPUs the work
   can use. Defaults provide **32 CPUs (16 cores) + 384,000 MB per GPU** (`sacct` shows `375G`);
   convenient for heavy jobs but oversized for light serving, inference, or profiling. Set explicit
@@ -339,15 +340,15 @@ the real blocker, name the page instead of telling the user to go find a sysadmi
 
 | What they're blocked on | Page |
 |---|---|
-| `expedite` rejected (not granted), or home quota too small | `/requests` — types `expedite_qos`, `quota_increase`, `other`; tracked, with a decision |
-| Which GPUs are actually free right now, per node | `/monitor` |
-| The live queue; their own usage and storage | `/queue`, `/usage` |
+| `expedite` rejected (not granted) | `/work-requests` — a time-limited priority grant for a deadline; tracked, with a decision, and it expires on its own |
+| Home quota too small, or another account change | `/requests` — types `quota_increase`, `other`; tracked, with a decision |
+| Which GPUs are actually free right now, per node; the live queue; their own usage and storage | `/hub` |
 | SSH keys, account details, request history | `/me` |
 | Signed in but no cluster account yet | `/no-account` explains the next step |
 | What changed on the cluster, news, help | `/changes`, `/news`, `/support`, `/wiki` |
 
 Use it to *unblock*, not as a detour: if `--qos=expedite` is rejected, the reply is "not granted —
-request it at `/requests`", and then you carry on with the default QoS rather than stalling.
+request it at `/work-requests`", and then you carry on with the default QoS rather than stalling.
 
 ## Storage and environment: where files go, what's already set up
 
