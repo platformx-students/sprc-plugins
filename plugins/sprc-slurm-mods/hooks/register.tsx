@@ -96,9 +96,11 @@ async function put<K extends keyof S>($: $, k: K, fn: (v: S[K]) => S[K]): Promis
 // Module-local; a reload starts these over.
 const cfg = { pollMs: 30_000, guards: 'enforce', liveContext: true, wake: true }
 let user = ''
+let home = ''
 let isLoginNode = false
 let isPolling = false
 let lastPollAt = 0
+let commandSeq = 0
 // What the prompt hook last attached, so an unchanged cluster is not re-sent.
 let lastContext = { text: '', at: 0 }
 // The main conversation's running turn, if any. Jobs one loop follows during
@@ -565,7 +567,7 @@ function resultsLine(owner: string | undefined): string {
 /** Whether the command runs a script (bash x.sh, ./run, python x.py) whose text calls sbatch. */
 async function runsSubmitScript($: $, command: string): Promise<boolean> {
   const cwd = await $.session.cwd()
-  for (const path of scriptsRun(command, cwd).slice(0, 4)) {
+  for (const path of scriptsRun(command, cwd, home).slice(0, 4)) {
     const text = await $.fs.read(path).catch(() => null)
     if (text !== null && /\bsbatch\b/.test(text.slice(0, 200_000))) return true
   }
@@ -598,14 +600,23 @@ async function submittedSince(run: Run, ids: readonly string[], since: number): 
 
 /** Whole words of 3+ characters: names a job or script could be given. */
 function words(text: string): string[] {
-  return text.split(/[^A-Za-z0-9_.+-]+/).filter(w => w.length >= 3)
+  const out = text.split(/[^A-Za-z0-9_.+-]+/).filter(w => w.length >= 3)
+  // A name built from a variable (`-J sweep-$i`, `run_${n}.sbatch`) is kept as a prefix, `sweep-*`.
+  for (const m of text.matchAll(/([A-Za-z0-9_.+-]{3,})\$\{?[A-Za-z_]/g)) out.push(`${m[1]}*`)
+  return out
+}
+
+/** Whether `name` is one of `tokens`, whole or by a `prefix*` token. */
+function named(tokens: readonly string[], name: string): boolean {
+  if (name.length < 3) return false
+  return tokens.some(t => (t.endsWith('*') ? name.startsWith(t.slice(0, -1)) : t === name))
 }
 
 /** The words of a command and of the scripts it runs or submits, which name the jobs it can make. */
 async function watchTokens($: $, command: string): Promise<string[]> {
   const cwd = await $.session.cwd()
   const texts = [command]
-  const paths = [...scriptsRun(command, cwd), ...sbatchScripts(command, cwd).map(s => s.path).filter(Boolean)]
+  const paths = [...scriptsRun(command, cwd, home), ...sbatchScripts(command, cwd, home).map(s => s.path).filter(Boolean)]
   for (const path of [...new Set(paths)].slice(0, 4)) {
     const text = await $.fs.read(path).catch(() => null)
     if (text !== null) texts.push(text.slice(0, 100_000))
@@ -639,7 +650,7 @@ async function adoptWatched($: $, now: number): Promise<void> {
       w =>
         Number(id) > w.top &&
         at >= w.since - 5000 &&
-        (w.tokens.includes(name) || (file.length >= 3 && w.tokens.includes(file)) || (name === 'wrap' && w.wrap && dir === w.cwd)),
+        (named(w.tokens, name) || named(w.tokens, file) || (name === 'wrap' && w.wrap && dir === w.cwd)),
     )
     if (w) claimed.set(w, [...(claimed.get(w) ?? []), id])
   }
@@ -654,7 +665,7 @@ async function namedBy(run: Run, ids: readonly string[], tokens: readonly string
   for (const line of r.stdout.split('\n')) {
     const [id, name = '', cmd = ''] = line.trim().split('|')
     const file = cmd.split('/').pop() ?? ''
-    if (id && (tokens.includes(name) || (file.length >= 3 && tokens.includes(file)))) ok.add(id)
+    if (id && (named(tokens, name) || named(tokens, file))) ok.add(id)
   }
   return [...ok]
 }
@@ -674,12 +685,12 @@ async function guardFindings($: $, command: string): Promise<Finding[]> {
   const cwd = await $.session.cwd()
   // A script's own #SBATCH --chdir settles where it runs, so read the scripts named.
   const scripts = new Map<string, string>()
-  for (const { script, path } of sbatchScripts(command, cwd)) {
+  for (const { script, path } of sbatchScripts(command, cwd, home)) {
     if (!path || scripts.has(script)) continue
     const text = await $.fs.read(path).catch(() => null)
     if (text !== null) scripts.set(script, text.slice(0, 20_000))
   }
-  return checkBash(command, { cwd, allocatedNodes: allocated, isLoginNode, scripts })
+  return checkBash(command, { cwd, home, allocatedNodes: allocated, isLoginNode, scripts })
 }
 
 function why(err: { kind: string; message?: string }): string {
@@ -703,6 +714,7 @@ export const register: Register = (on, options) => {
       return started
     }
     user = (await $.env.get('USER')) ?? ''
+    home = (await $.env.get('HOME')) ?? ''
     const host = await $.process.run(['hostname', '-s']).catch(() => null)
     isLoginNode = (host?.stdout.trim() ?? '') === 'sprlab005'
     await put($, 'isEnabled', () => true)
@@ -794,6 +806,9 @@ export const register: Register = (on, options) => {
     let isViaScript = false
     let top = Infinity
     const startedAt = await $.clock.now()
+    // One submitting command (and what it submits in the background) is one group and one message,
+    // so a quick test never waits on a long run submitted in the same turn.
+    const group = `${loopKey(e.agentId)}|cmd${startedAt}.${++commandSeq}`
     try {
       isSubmit = runsSbatch(command)
       if (!isSubmit) isSubmit = isViaScript = await runsSubmitScript($, command)
@@ -831,12 +846,12 @@ export const register: Register = (on, options) => {
         // A script that only mentions sbatch must also name the job, so another session's isn't taken.
         if (ids.length && isViaScript) ids = await namedBy(runner($), ids, await watchTokens($, command))
       }
-      const fresh = await follow($, ids, e.agentId, 'sbatch')
+      const fresh = await follow($, ids, e.agentId, 'sbatch', group)
       if (fresh.length) {
         notes.push(
           toldFollowing.has(loop)
             ? `[sprc] Following ${idRanges(fresh)}.`
-            : `[sprc] Following ${idRanges(fresh)}${fresh.length > 1 ? ' as a group' : ''}: when ${fresh.length > 1 ? 'they have all' : 'it has'} ended you get one message with results, failures, log paths and right-sizing. Every job you submit is followed this way, so never block on it: ${resultsLine(e.agentId)}`,
+            : `[sprc] Following ${idRanges(fresh)}${fresh.length > 1 ? ' as a group' : ''}: when ${fresh.length > 1 ? 'they have all' : 'it has'} ended you get one message with the outcome (log paths for failures, right-sizing where it would help). Every job you submit is followed this way, so never block on it: ${resultsLine(e.agentId)}`,
         )
         toldFollowing.add(loop)
         $.ui.toast(`following ${fresh.length === 1 ? `job ${fresh[0]}` : `${fresh.length} jobs`}`)
@@ -846,7 +861,7 @@ export const register: Register = (on, options) => {
         if (Number.isFinite(top)) {
           const watch: Watch = {
             owner: e.agentId,
-            group: groupKey(e.agentId),
+            group,
             taskId: typeof taskId === 'string' ? taskId : undefined,
             top,
             since: startedAt,
@@ -894,7 +909,7 @@ export const register: Register = (on, options) => {
       context.push(...(await takeNotices($, undefined)))
       if (cfg.liveContext && SLURMY.test(e.text)) {
         const now = await $.clock.now()
-        if (now - lastPollAt > 60_000) await poll($)
+        if (now - lastPollAt > cfg.pollMs / 2) await poll($)
         const snap = await get($, 'snapshot')
         // An unchanged cluster is already in the conversation: re-send it only
         // after 15 minutes, so a long Slurm-heavy session pays for it once.

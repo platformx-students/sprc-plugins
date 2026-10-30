@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { checkBash, runsSbatch, sbatchScript, sbatchScripts, scriptsRun, segments, stripHeredocs, submittedJobs } from '../hooks/guards'
+import { checkBash, resolvePath, runsSbatch, sbatchScript, sbatchScripts, scriptsRun, segments, stripHeredocs, submittedJobs } from '../hooks/guards'
 import type { GuardContext } from '../hooks/guards'
 import {
   buildReport,
@@ -107,6 +107,17 @@ describe('submission detection', () => {
   test('sbatch fed its script on stdin is still a submission', () => {
     expect(runsSbatch('sbatch <<EOF\n#!/bin/bash\n#SBATCH -t 1\nsrun hostname\nEOF')).toBe(true)
   })
+  test('paths resolve through ~, $HOME and relative cd', () => {
+    expect(resolvePath('/a/b', '~/x', '/home/me')).toBe('/home/me/x')
+    expect(resolvePath('/a/b', '$HOME/x/../y', '/home/me')).toBe('/home/me/y')
+    expect(resolvePath('/a/b', '../c')).toBe('/a/c')
+    expect(resolvePath('', 'c')).toBe('')
+    expect(resolvePath('/a', '$WORK/x')).toBe('')
+    expect(resolvePath('/a', '~/x')).toBe('')
+    expect(scriptsRun('cd ~/t && sh submit.sh', '/h', '/home/me')).toEqual(['/home/me/t/submit.sh'])
+    expect(checkBash('cd /tmp && cd job && sbatch run.sh', ctx).map(f => f.rule)).toEqual(['sbatch-from-tmp'])
+  })
+
   test('scripts a command runs', () => {
     expect(scriptsRun('JOB=x sh e2e/submit.sh --go', '/h/p')).toEqual(['/h/p/e2e/submit.sh'])
     expect(scriptsRun('cd /w && ./launch.sh; python3 sweep.py --n 3', '/h')).toEqual(['/w/launch.sh', '/w/sweep.py'])

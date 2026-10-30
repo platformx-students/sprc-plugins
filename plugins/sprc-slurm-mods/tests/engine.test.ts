@@ -36,7 +36,7 @@ type Cluster = {
 
 function fakeCluster(on: On, c: Cluster) {
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  mock.env(on, { USER: 'me' })
+  mock.env(on, { USER: 'me', HOME: '/home/me' })
   on('tool.call', ($, e) => {
     const command = (e as { command?: string }).command ?? ''
     c.onBash?.(command)
@@ -330,6 +330,52 @@ describe('on a fake cluster', () => {
     for (let i = 0; i < 4; i++) await clock.advance(31_000)
     expect(c.prompts.some(p => p.includes('96004'))).toBe(true)
     expect(c.prompts.join('\n')).not.toContain('96005')
+  })
+
+  test('a wrapper run after cd ~/dir is found (live test 3)', async ($, on) => {
+    const c = newCluster()
+    fakeCluster(on, c)
+    mock.clock(on, { now: T0 })
+    await start($)
+    c.files['/home/me/livetest/submit.sh'] = '#!/bin/sh\nJID=$(sbatch --parsable -J mlt-wrapper --wrap "sleep 30")\n'
+    const cmd = 'cd ~/livetest && sh submit.sh'
+    c.onBash = command => {
+      if (command === cmd) c.queue.push(at(row('97001', 'me', 'PD', 'mlt-wrapper'), NEW))
+    }
+    expect(JSON.stringify(await bash($, cmd))).toContain('Following 97001')
+  })
+
+  test('two submitting commands in one turn get a message each (live test: a 1 s failure waited 2 min)', async ($, on) => {
+    const c = newCluster()
+    fakeCluster(on, c)
+    const clock = mock.clock(on, { now: T0 })
+    await start($)
+    c.bashOutput['sbatch fail.sbatch'] = 'Submitted batch job 97010'
+    c.bashOutput['sbatch long.sbatch'] = 'Submitted batch job 97011'
+    c.queue.push(at(row('97010', 'me', 'PD', 'fail'), NEW), at(row('97011', 'me', 'PD', 'long'), NEW))
+    await bash($, 'sbatch fail.sbatch')
+    await bash($, 'sbatch long.sbatch')
+    c.queue = c.queue.filter(l => !l.startsWith('97010|'))
+    c.sacct.push(sacctRow('97010', 'fail', 'FAILED', '3:0', '00:00:01'))
+    await clock.advance(31_000)
+    await clock.advance(31_000)
+    const said = [...c.prompts, JSON.stringify(await bash($, 'true'))].join('\n')
+    expect(said).toContain('97010')
+    expect(said).not.toContain('97011 ')
+  })
+
+  test('a background loop naming its jobs from a variable is followed by prefix (live test 5b)', async ($, on) => {
+    const c = newCluster()
+    fakeCluster(on, c)
+    const clock = mock.clock(on, { now: T0 })
+    await start($)
+    const cmd = 'for i in 1 2; do sbatch -J mlt-var-$i --wrap "sleep 40"; done'
+    c.bgTask[cmd] = 'b9'
+    await bash($, cmd, { run_in_background: true })
+    c.queue.push(at(row('97020', 'me', 'PD', 'mlt-var-1'), NEW), at(row('97021', 'me', 'PD', 'mlt-var-2'), NEW), at(row('97022', 'me', 'PD', 'mlt-other'), NEW))
+    await clock.advance(31_000)
+    const status = text(await $.tool.call({ tool: 'mcp__sprc-slurm-mods__sprc_status' } as never))
+    expect(status).toContain('Following: 97020–97021')
   })
 
   test("a printed line or a mention never adopts another session's job or an old one", async ($, on) => {

@@ -12,6 +12,8 @@ export type Finding = { level: 'reject' | 'note'; rule: string; message: string 
 export type GuardContext = {
   /** The session's working directory, where a bare command runs; '' = unknown. */
   cwd: string
+  /** The person's home directory, for `~` and `$HOME`; '' or absent = unknown. */
+  home?: string
   /** Nodes where this user holds a running allocation right now; null = unknown. */
   allocatedNodes: ReadonlySet<string> | null
   /** True when the session runs on the login node (sprlab005). */
@@ -136,6 +138,29 @@ function head(words: readonly string[]): string[] {
   return words.slice(i)
 }
 
+/**
+ * Where a path lands from `dir`: absolute as is, `~`/`$HOME` from `home`,
+ * relative joined to `dir`. '' when it cannot tell (an unknown start, another
+ * variable, `cd -`).
+ */
+export function resolvePath(dir: string, target: string | undefined, home = ''): string {
+  let t = target ?? (home || '')
+  if (t === '~' || t === '$HOME' || t === '${HOME}') t = home
+  else if (/^(~|\$HOME|\$\{HOME\})\//.test(t)) t = home ? `${home}/${t.replace(/^[^/]+\//, '')}` : ''
+  if (!t || t === '-' || t.includes('$') || t.startsWith('~')) return ''
+  if (!t.startsWith('/')) {
+    if (!dir) return ''
+    t = `${dir}/${t}`
+  }
+  const parts: string[] = []
+  for (const p of t.split('/')) {
+    if (p === '' || p === '.') continue
+    if (p === '..') parts.pop()
+    else parts.push(p)
+  }
+  return `/${parts.join('/')}`
+}
+
 function base(word: string | undefined): string {
   return (word ?? '').split('/').pop() ?? ''
 }
@@ -214,7 +239,7 @@ function checkSegments(segs: string[][], ctx: GuardContext): Finding[] {
     if (!cmd) continue
 
     // A relative, ~ or $VAR target is not resolved here: the directory becomes unknown.
-    if (cmd === 'cd' || cmd === 'pushd') cwd = words[1]?.startsWith('/') ? words[1] : ''
+    if (cmd === 'cd' || cmd === 'pushd') cwd = resolvePath(cwd, words[1], ctx.home)
 
     if (cmd === 'sbatch') {
       const script = sbatchScript(words)
@@ -277,7 +302,7 @@ function checkSegments(segs: string[][], ctx: GuardContext): Finding[] {
  * The batch scripts a command line submits, each with the path to read it
  * at (following `cd` to absolute directories; '' where it cannot tell).
  */
-export function sbatchScripts(command: string, cwd: string): { script: string; path: string }[] {
+export function sbatchScripts(command: string, cwd: string, home = ''): { script: string; path: string }[] {
   const out: { script: string; path: string }[] = []
   // Both readings, as in checkBash: a script either one finds is read.
   for (const segs of [segments(command), segments(command, true)]) {
@@ -285,11 +310,11 @@ export function sbatchScripts(command: string, cwd: string): { script: string; p
     for (const seg of segs) {
       const words = head(seg)
       const cmd = base(words[0])
-      if (cmd === 'cd' || cmd === 'pushd') dir = words[1]?.startsWith('/') ? words[1] : ''
+      if (cmd === 'cd' || cmd === 'pushd') dir = resolvePath(dir, words[1], home)
       if (cmd !== 'sbatch') continue
       const script = sbatchScript(words)
       if (script === undefined || out.some(o => o.script === script)) continue
-      out.push({ script, path: script.startsWith('/') ? script : dir && !/^[~$]/.test(script) ? `${dir}/${script}` : '' })
+      out.push({ script, path: resolvePath(dir, script, home) })
     }
   }
   return out
@@ -300,13 +325,13 @@ export function sbatchScripts(command: string, cwd: string): { script: string; p
  * `sh`/`zsh`/`source`/`.`, `./x.sh` or any path run as a command, and
  * `python x.py`. A wrapper like these may call sbatch itself.
  */
-export function scriptsRun(command: string, cwd: string): string[] {
+export function scriptsRun(command: string, cwd: string, home = ''): string[] {
   const out: string[] = []
-  const at = (p: string) => (p.startsWith('/') ? p : cwd && !/^[~$]/.test(p) ? `${cwd}/${p.replace(/^(\.\/)+/, '')}` : '')
+  const at = (p: string) => resolvePath(cwd, p, home)
   for (const seg of segments(command)) {
     const words = head(seg)
     const cmd = base(words[0])
-    if (cmd === 'cd' || cmd === 'pushd') cwd = words[1]?.startsWith('/') ? words[1] : ''
+    if (cmd === 'cd' || cmd === 'pushd') cwd = resolvePath(cwd, words[1], home)
     let script: string | undefined
     if (/^(bash|sh|zsh|source|\.)$/.test(cmd) || /^python[\d.]*$/.test(cmd)) {
       if (words.some(w => w === '-c' || w === '-m' || w === '-')) continue
