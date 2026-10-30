@@ -130,7 +130,9 @@ fair-share and age); fair-share and wait-time only order peers *within* the same
   the GPU and CPU caps together; a GPU job asking more than 32 CPUs/GPU hits the CPU cap first (e.g.
   2 GPUs × 64 CPUs = 128 fills `normal`). Over the cap → pends `QOSMaxCpuPerUserLimit`. A single
   job whose own request exceeds its tier's cap is **rejected at submit** by `job_submit.lua` (with a
-  pointer to scavenger). Scavenger jobs don't count against the tier's cap.
+  pointer to scavenger). Scavenger jobs don't count against the tier's cap. Interactive sessions
+  (`debug`) run under the same QoS and count too, and can't overflow to scavenger. `--exclusive`
+  counts every CPU on its nodes (128 each), so a two-node exclusive job is refused in `normal`.
 
 - **Preemption is REQUEUE, never CANCEL** (`PreemptType=preempt/qos`, `PreemptMode=REQUEUE`), and
   only `scavenger` is ever preempted. `normal`, `undergrad`, `expedite` are never auto-killed. A

@@ -248,9 +248,11 @@ Pass `--qos` only when one of these applies — otherwise say nothing about QoS:
 - **Past the per-user CPU cap.** Each research tier caps the CPUs one user holds at once, CPUs inside
   GPU jobs included: **128 on `normal`/`expedite`, 64 on `undergrad`** (32 per allowed GPU; see
   `references/cluster-facts.md`). `scavenger` has no CPU cap, so CPU work beyond the cap goes there
-  (same checkpoint caveat, 1-day wall). Size so the default tier holds what fits — e.g. a 16-CPU array
-  with `%8` in the default tier plus a second array on `--qos=scavenger` — rather than letting tasks
-  pend on `QOSMaxCpuPerUserLimit`. A single job over the cap is **rejected at submit**.
+  (same checkpoint caveat, 1-day wall). Size so the default tier holds what fits, with headroom:
+  interactive `salloc`/`srun` counts against the same cap and can't use scavenger. E.g. a 16-CPU array
+  with `%6` on `normal` (`%3` on `undergrad`) plus a second array on `--qos=scavenger`, rather than
+  letting tasks pend on `QOSMaxCpuPerUserLimit`. A single job over the cap is usually **rejected at
+  submit**; `--exclusive` counts all 128 CPUs of each node.
 - **`--qos=expedite`** for a genuine deadline — but it's **sysadmin-granted per user** and not
   self-serve. If the user needs it, tell them to ask; until granted, `--qos=expedite` is rejected.
   (It's also the one QoS exempt from the interactive 1 h cap, so a granted user's `salloc` runs its
