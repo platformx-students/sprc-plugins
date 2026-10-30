@@ -1,0 +1,122 @@
+{
+  "skill_name": "slurm",
+  "evals": [
+    {
+      "id": 0,
+      "name": "batch-submit-multi-gpu",
+      "prompt": "I'm logged into sprlab005. I've got a script at ~/proj/run_sim.sh that needs 2 GPUs and takes roughly 10 hours to finish. Can you set it up to actually run on the cluster and tell me how to check on it? It writes checkpoints to ~/proj/ckpts every 30 min so it can resume if it dies.",
+      "expected_output": "",
+      "files": [],
+      "assertions": [
+        {
+          "text": "Primary deliverable is a staged job script file (a .sbatch written to outputs/), not just prose describing one"
+        },
+        {
+          "text": "Requests exactly 2 GPUs (--gres=gpu:2 or --gpus=2)"
+        },
+        {
+          "text": "Sets an honest --time greater than 10h but not maxed at the 3-day cap"
+        },
+        {
+          "text": "Gives the sbatch submit command plus a watch/monitor command (squeue/tail/scontrol)"
+        },
+        {
+          "text": "Does NOT run run_sim.sh on the login node"
+        },
+        {
+          "text": "Reply is concise and action-oriented: NO unsolicited per-flag walkthrough or QoS/fair-share tutorial"
+        },
+        {
+          "text": "Sets up or recommends a BACKGROUND/harness monitor that watches for job completion and follows up with the final state, rather than blocking inline or just walking away"
+        },
+        {
+          "text": "Still surfaces the relevant heads-up concisely (e.g. that checkpointing makes walltime/requeue interruption safe, or adds --requeue) \u2014 does not omit needed info for the sake of brevity"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "interactive-gpu-session",
+      "prompt": "I need to interactively debug some code on a real GPU on our cluster - like get a shell on a node with a GPU and poke at it with a python REPL and nvidia-smi. I'm on sprlab005. What's the right way to do that here?",
+      "expected_output": "",
+      "files": [],
+      "assertions": [
+        {
+          "text": "Leads with the concrete commands to run (salloc --gres=gpu:1 --time=..., then work on the node), not a multi-section explainer"
+        },
+        {
+          "text": "Conveys you must hold an allocation BEFORE ssh-ing to a node (no-allocation SSH is denied)"
+        },
+        {
+          "text": "Mentions releasing the allocation when done (exit/scancel)"
+        },
+        {
+          "text": "Reply is concise: no unsolicited tutorial on partitions/QoS/fair-share the user didn't ask for"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "scavenger-bulk-sweep",
+      "prompt": "I want to run a hyperparameter sweep on our lab cluster - like 200 short jobs, each needs 1 GPU for under an hour. It's not urgent at all and every run checkpoints. I don't want to hog the cluster or annoy the other grad students. What's the best way to submit these here?",
+      "expected_output": "",
+      "files": [],
+      "assertions": [
+        {
+          "text": "Provides a ready-to-run job-array script as an artifact (.sbatch in outputs/), not just a description"
+        },
+        {
+          "text": "Uses --qos=scavenger and a throttled job array (e.g. --array=0-199%N)"
+        },
+        {
+          "text": "Right-sizes: 1 GPU and a short honest --time"
+        },
+        {
+          "text": "States (briefly) scavenger is safe here because the runs checkpoint / are requeued, without a long fair-share lecture"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "troubleshoot-pending-job",
+      "prompt": "I submitted a job to our slurm cluster like 40 minutes ago and it's STILL just sitting there pending. I ran scontrol show job and it says Reason=QOSMaxGRESPerUser. I already have 4 other GPU jobs running. What's going on and how do I fix it?",
+      "expected_output": "",
+      "files": [],
+      "assertions": [
+        {
+          "text": "Correctly identifies QOSMaxGRESPerUser as the per-user GPU cap (4 on normal) \u2014 the 4 running jobs are at the cap"
+        },
+        {
+          "text": "States it cannot be routed around by changing flags (mem/cpus/partition)"
+        },
+        {
+          "text": "Gives the actionable options directly (wait, cancel a running job, or scavenger for restartable work)"
+        },
+        {
+          "text": "Answers concisely and to the point, without an unsolicited general Slurm/QoS tutorial"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "partition-trap",
+      "prompt": "Hey, about to submit a training run on our cluster. Should I send it to the `gpu` partition or the `long` partition? It needs 1 GPU and runs about two days. Just give me the sbatch line.",
+      "expected_output": "",
+      "files": [],
+      "assertions": [
+        {
+          "text": "Corrects the premise: there is no `gpu` or `long` partition here (partitions are only main/debug)"
+        },
+        {
+          "text": "Explains GPUs come from --gres (not a partition) and walltime from --time (not a partition)"
+        },
+        {
+          "text": "Gives a correct sbatch invocation: default partition (main, no -p needed), --gres=gpu:1, --time=2-00:00:00 (under the 3-day normal cap)"
+        },
+        {
+          "text": "Answers concisely \u2014 gives the corrected line directly rather than a long lecture"
+        }
+      ]
+    }
+  ]
+}

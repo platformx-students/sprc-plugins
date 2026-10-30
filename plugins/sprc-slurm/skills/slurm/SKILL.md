@@ -302,7 +302,7 @@ Each time a job of yours ends:
 |---|---|
 | `Elapsed` well under `Timelimit` | Cut `--time` to roughly `Elapsed × 1.5`, floor ~15 min. An honest short walltime backfills sooner, so this speeds *them* up — it isn't housekeeping. |
 | `MaxRSS` far below the memory requested | Leave the default, or set `--mem` ≈ `MaxRSS × 1.3`. Never trim below the observed peak. |
-| CPU use well under ~25% of the CPUs held | Cut to what the run used plus headroom: `-c` for CPU jobs; for GPU jobs `--cpus-per-gpu` ≈ dataloader workers + 2–4 (the default is 32 per GPU). Idle CPUs still count against the per-user CPU cap and block other people's jobs on the node. Don't cut below 4, and remember memory defaults scale per CPU: set `--mem` explicitly when you cut CPUs. |
+| CPU use well under ~25% of the CPUs held, on a `COMPLETED` run | Cut to what the run used plus headroom, in whichever option the job already uses: `-c`/`--cpus-per-task`, or for GPU jobs `--cpus-per-gpu` (≈ dataloader workers + 2–4; the default is 32 per GPU). The two options can't be combined. Idle CPUs still count against the per-user CPU cap and block other people's jobs on the node. Don't cut below 4, and set `--mem` explicitly when you cut CPUs, since default memory scales per CPU. Don't trim CPUs from a timed-out, cancelled or requeued run: its `TotalCPU` can be incomplete. |
 | GPUs idle, or the code is single-GPU | Drop `--gres` to what it uses. An unused GPU is the most expensive thing you can hold against future fair-share. |
 | `State=TIMEOUT` | Raise `--time` **and** add checkpointing. You've learned "not enough", not how much — don't infer a precise value from a truncated run. |
 | `State=OUT_OF_MEMORY` | Raise memory. Never trim anything else in the same resubmission. |

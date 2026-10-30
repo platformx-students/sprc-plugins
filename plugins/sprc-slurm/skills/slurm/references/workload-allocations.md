@@ -57,9 +57,10 @@ Then:
 - Set the next walltime to roughly the slowest comparable completed run × 1.5; use a larger margin
   for variable work and tighten it (× 1.25) once several runs agree. With no comparable run yet,
   pilot a small slice first (see SKILL.md, "Sizing time from evidence").
-- Measure CPU use as `TotalCPU ÷ (Elapsed × AllocCPUS)` from the job's own row; below ~25%, cut
-  `-c` (CPU jobs) or `--cpus-per-gpu` (GPU jobs, default 32 per GPU) and set `--mem` explicitly,
-  since default memory scales with CPUs.
+- Measure CPU use as `TotalCPU ÷ (Elapsed × AllocCPUS)` from the job's own row of a `COMPLETED`
+  run; below ~25%, cut whichever CPU option the job already uses (`-c`, or `--cpus-per-gpu` for GPU
+  jobs, default 32 per GPU; the two can't be combined) and set `--mem` explicitly, since default
+  memory scales with CPUs.
 - Set memory to roughly observed peak × 1.3, never below the observed peak.
 - Drop unused GPUs; do not add GPUs unless the model needs the VRAM or measured throughput scales.
 - Keep the safer request when measurements are missing or a smaller request risks losing the run.
