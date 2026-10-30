@@ -71,6 +71,7 @@ function isLiteralCode(before: string): boolean {
     else if (c === '"' || c === "'") quote = c
     else if (c === '#' && (i === 0 || /\s/.test(before[i - 1]!))) return false
     else if (before.startsWith('$((', i)) (arith++, (i += 2))
+    else if (before.startsWith('((', i)) (arith++, i++)
     else if (before.startsWith('))', i) && arith) (arith--, i++)
   }
   return !quote && !arith
@@ -133,7 +134,13 @@ function head(words: readonly string[]): string[] {
     const w = words[i]!
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) i++
     else if (/^(env|time|nohup|exec|command|do|then|else|elif|if|while|until|!|\{)$/.test(w)) i++
-    else break
+    else if (w === 'timeout' || w === 'xargs') {
+      // Their options (some take a value), then timeout's duration: the command follows.
+      const takesValue = w === 'timeout' ? /^(-s|-k|--signal|--kill-after)$/ : /^(-[nLPIdaSsE]|--max-args|--max-procs|--replace|--delimiter|--arg-file)$/
+      i++
+      while (i < words.length && words[i]!.startsWith('-')) i += takesValue.test(words[i]!) ? 2 : 1
+      if (w === 'timeout') i++
+    } else break
   }
   return words.slice(i)
 }
@@ -217,16 +224,14 @@ const HEAVY = /^(torchrun|deepspeed|accelerate|vllm|sglang|python[\d.]*)$/
 const SCRATCH_DIRS = /^\/(tmp|var\/tmp|dev\/shm)(\/|$)/
 
 /**
- * Findings over both readings of the command: raw, and with heredoc bodies
- * skipped. Each can hide a line the other sees (a quote inside a body, or a
- * `<<` misread as a heredoc), so a command either one finds is checked.
+ * Findings for the command with its heredoc bodies skipped: a body is a file's
+ * text (`cat > job.sbatch <<EOF … torchrun … EOF`), not commands run here, and
+ * a quote inside one would otherwise hide every line after it. Stripping fails
+ * closed: a `<<` in quotes, a comment or arithmetic is not a heredoc, and one
+ * whose terminator never comes keeps its lines.
  */
 export function checkBash(command: string, ctx: GuardContext): Finding[] {
-  const seen = new Set<string>()
-  return [...checkSegments(segments(command), ctx), ...checkSegments(segments(command, true), ctx)].filter(f => {
-    const key = `${f.rule}\n${f.message}`
-    return seen.has(key) ? false : (seen.add(key), true)
-  })
+  return checkSegments(segments(command, true), ctx)
 }
 
 function checkSegments(segs: string[][], ctx: GuardContext): Finding[] {
@@ -304,8 +309,8 @@ function checkSegments(segs: string[][], ctx: GuardContext): Finding[] {
  */
 export function sbatchScripts(command: string, cwd: string, home = ''): { script: string; path: string }[] {
   const out: { script: string; path: string }[] = []
-  // Both readings, as in checkBash: a script either one finds is read.
-  for (const segs of [segments(command), segments(command, true)]) {
+  // The same reading as checkBash: heredoc bodies are text, not commands.
+  for (const segs of [segments(command, true)]) {
     let dir = cwd
     for (const seg of segs) {
       const words = head(seg)
@@ -328,7 +333,7 @@ export function sbatchScripts(command: string, cwd: string, home = ''): { script
 export function scriptsRun(command: string, cwd: string, home = ''): string[] {
   const out: string[] = []
   const at = (p: string) => resolvePath(cwd, p, home)
-  for (const seg of segments(command)) {
+  for (const seg of segments(command, true)) {
     const words = head(seg)
     const cmd = base(words[0])
     if (cmd === 'cd' || cmd === 'pushd') cwd = resolvePath(cwd, words[1], home)
@@ -349,7 +354,11 @@ export function scriptsRun(command: string, cwd: string, home = ''): string[] {
 
 /** Whether a command line runs sbatch (also inside `$( )`, a loop or a pipeline). */
 export function runsSbatch(command: string): boolean {
-  return segments(command, true).some(words => base(head(words)[0]) === 'sbatch') || /`\s*sbatch\b/.test(command)
+  return (
+    segments(command, true).some(words => base(head(words)[0]) === 'sbatch') ||
+    // Inside a backquote or `$( )` (also within double quotes), `eval`, or `sh -c "…"`.
+    /(`|\$\(|\beval\s+["']?|\b(?:ba|z)?sh\s+-c\s+["']?)\s*sbatch\b/.test(command)
+  )
 }
 
 /**

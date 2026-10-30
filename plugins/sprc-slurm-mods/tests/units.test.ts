@@ -98,6 +98,8 @@ describe('submission detection', () => {
     // A heredoc that never ends hides nothing.
     expect(stripHeredocs('cat <<EOF\nbody\nsbatch a.sh')).toBe('cat <<EOF\nbody\nsbatch a.sh')
     expect(checkBash('echo "x << EOF"\ntorchrun --nproc-per-node=2 t.py', ctx).map(f => f.rule)).toContain('gpu-work-on-login-node')
+    // Writing a script and submitting it is the common case: its body is text, never a command here.
+    expect(checkBash("cat > job.sbatch <<'EOF'\n#!/bin/bash\ncd /tmp\ntorchrun --nproc-per-node=2 train.py\nEOF\nsbatch job.sbatch", ctx)).toEqual([])
     // A quote inside a heredoc body cannot hide a launcher after it either.
     expect(checkBash("cat > n.txt <<'EOF'\nit's\nEOF\ntorchrun --nproc-per-node=2 t.py", ctx).map(f => f.rule)).toContain('gpu-work-on-login-node')
     expect(checkBash("cat > n.txt <<'EOF'\nit's\nEOF\ncd /tmp && sbatch job.sh", ctx).map(f => f.rule)).toEqual(['sbatch-from-tmp'])
@@ -116,6 +118,16 @@ describe('submission detection', () => {
     expect(resolvePath('/a', '~/x')).toBe('')
     expect(scriptsRun('cd ~/t && sh submit.sh', '/h', '/home/me')).toEqual(['/home/me/t/submit.sh'])
     expect(checkBash('cd /tmp && cd job && sbatch run.sh', ctx).map(f => f.rule)).toEqual(['sbatch-from-tmp'])
+  })
+
+  test('sbatch behind wrappers and inside quoted substitutions', () => {
+    expect(runsSbatch('JID="$(sbatch --parsable x.sbatch)"')).toBe(true)
+    expect(runsSbatch('timeout -s INT 30 sbatch x.sbatch')).toBe(true)
+    expect(runsSbatch('ls *.sbatch | xargs -n 1 sbatch')).toBe(true)
+    expect(runsSbatch('bash -c "sbatch x.sbatch"')).toBe(true)
+    expect(runsSbatch('eval "sbatch $ARGS"')).toBe(true)
+    expect(runsSbatch('cat x.sbatch; grep -n sbatch notes.md')).toBe(false)
+    expect(checkBash('timeout 60 torchrun --nproc-per-node=2 t.py', ctx).map(f => f.rule)).toContain('gpu-work-on-login-node')
   })
 
   test('scripts a command runs', () => {

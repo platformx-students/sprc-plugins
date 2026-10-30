@@ -57,6 +57,8 @@ function fakeCluster(on: On, c: Cluster) {
     return { value: undefined }
   })
   on('ui.log', () => ({ value: undefined }))
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  on('turn.complete', ($, e) => ({ text: (e as { answer?: string }).answer ?? '' }) as never)
   on('fs.read', ($, e) => {
     const path = (e as { path?: string }).path ?? ''
     if (path in c.files) return { value: c.files[path] } as never
@@ -376,6 +378,56 @@ describe('on a fake cluster', () => {
     await clock.advance(31_000)
     const status = text(await $.tool.call({ tool: 'mcp__sprc-slurm-mods__sprc_status' } as never))
     expect(status).toContain('Following: 97020–97021')
+  })
+
+  test('a background command adopts only the job and script names it uses, not every word', async ($, on) => {
+    const c = newCluster()
+    fakeCluster(on, c)
+    const clock = mock.clock(on, { now: T0 })
+    await start($)
+    c.files['/home/me/proj/launch.py'] = 'import subprocess\nsubprocess.run(["sbatch", "-J", "eval-x", "run.sbatch"])\n'
+    const cmd = 'python launch.py --task train'
+    c.bgTask[cmd] = 'b11'
+    await bash($, cmd, { run_in_background: true })
+    // 'train' is a word of the command but no job name it gives: another session's 'train' stays theirs.
+    c.queue.push(at(row('97030', 'me', 'PD', 'eval-x'), NEW), at(row('97031', 'me', 'PD', 'train'), NEW))
+    await clock.advance(31_000)
+    const status = text(await $.tool.call({ tool: 'mcp__sprc-slurm-mods__sprc_status' } as never))
+    expect(status).toContain('Following: 97030')
+    expect(status).not.toContain('Following: 97030–97031')
+  })
+
+  test("a subagent's background watch ends with its turn", async ($, on) => {
+    const c = newCluster()
+    fakeCluster(on, c)
+    const clock = mock.clock(on, { now: T0 })
+    await start($)
+    const cmd = 'for i in 1 2; do sbatch -J sub-run run.sbatch; sleep 600; done'
+    c.bgTask[cmd] = 'b12'
+    await bash($, cmd, { run_in_background: true, agentId: 'agent-7' })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ($ as any).turn.complete({ turnId: 'x', agentId: 'agent-7', answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' })
+    for (let i = 0; i < 3; i++) await clock.advance(31_000)
+    c.queue.push(at(row('97040', 'me', 'PD', 'sub-run'), NEW))
+    await clock.advance(31_000)
+    expect(text(await $.tool.call({ tool: 'mcp__sprc-slurm-mods__sprc_status' } as never))).not.toContain('Following: 97040')
+  })
+
+  test("a subagent's turn does not stop the idle main conversation from being woken", async ($, on) => {
+    const c = newCluster()
+    fakeCluster(on, c)
+    const clock = mock.clock(on, { now: T0 })
+    await start($)
+    c.bashOutput['sbatch a.sbatch'] = 'Submitted batch job 97050'
+    c.queue.push(at(row('97050', 'me', 'PD', 'a'), NEW))
+    await bash($, 'sbatch a.sbatch')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ($ as any).turn.start({ turnId: 'sub-1', agentId: 'agent-8', text: 'go' })
+    c.queue = c.queue.filter(l => !l.startsWith('97050|'))
+    c.sacct.push(sacctRow('97050', 'a'))
+    await clock.advance(31_000)
+    await clock.advance(31_000)
+    expect(c.prompts.some(p => p.includes('97050'))).toBe(true)
   })
 
   test("a printed line or a mention never adopts another session's job or an old one", async ($, on) => {

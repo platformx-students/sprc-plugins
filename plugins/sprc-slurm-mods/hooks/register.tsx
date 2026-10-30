@@ -550,7 +550,7 @@ async function queueTop(run: Run): Promise<number> {
 /** Your jobs above `floor`: what a command submitted when its output did not say. */
 async function mineAbove(run: Run, floor: number): Promise<string[]> {
   if (!Number.isFinite(floor)) return []
-  const r = await run(['squeue', '--me', '-h', '-r', '-o', '%F'], { timeoutMs: 10_000 }).catch(() => null)
+  const r = await run(['squeue', '--me', '-h', '-r', '-t', 'all', '-o', '%F'], { timeoutMs: 10_000 }).catch(() => null)
   if (!r || r.exitCode !== 0) return []
   return [...new Set(r.stdout.split('\n').map(l => l.trim()).filter(l => Number(l) > floor))]
 }
@@ -581,7 +581,7 @@ const EPOCH = ['env', 'SLURM_TIME_FORMAT=%s']
 /** Of `ids`, your jobs submitted at or after `since` (ms): in the queue, or already ended (sacct). */
 async function submittedSince(run: Run, ids: readonly string[], since: number): Promise<string[]> {
   const at = new Map<string, number>()
-  const q = await run([...EPOCH, 'squeue', '--me', '-h', '-r', '-j', ids.join(','), '-o', '%F|%V'], { timeoutMs: 10_000 }).catch(() => null)
+  const q = await run([...EPOCH, 'squeue', '--me', '-h', '-r', '-t', 'all', '-j', ids.join(','), '-o', '%F|%V'], { timeoutMs: 10_000 }).catch(() => null)
   for (const line of q?.exitCode === 0 ? q.stdout.split('\n') : []) {
     const [id, submit] = line.trim().split('|')
     if (id) at.set(parentId(id), Number(submit) * 1000)
@@ -598,11 +598,21 @@ async function submittedSince(run: Run, ids: readonly string[], since: number): 
   return [...new Set(ids.map(parentId))].filter(id => (at.get(id) ?? NaN) >= since - 5000)
 }
 
-/** Whole words of 3+ characters: names a job or script could be given. */
+/**
+ * The job names (`-J`, `--job-name`, also in `#SBATCH` lines) and script file
+ * names a text gives: what the jobs it submits will be called. A name built
+ * from a variable (`-J sweep-$i`) becomes a prefix token, `sweep-*`.
+ */
 function words(text: string): string[] {
-  const out = text.split(/[^A-Za-z0-9_.+-]+/).filter(w => w.length >= 3)
-  // A name built from a variable (`-J sweep-$i`, `run_${n}.sbatch`) is kept as a prefix, `sweep-*`.
-  for (const m of text.matchAll(/([A-Za-z0-9_.+-]{3,})\$\{?[A-Za-z_]/g)) out.push(`${m[1]}*`)
+  const out: string[] = []
+  // Shell (`-J x`, `--job-name=x`, `#SBATCH -J x`) and argv lists (`["-J", "x"]`).
+  for (const m of text.matchAll(/(?:^|[\s#"'[,])(?:-J|--job-name)["']?(?:=|[\s,"']+)["']?([^\s"';|&),\]]+)/gm)) {
+    const name = m[1]!
+    const at = name.search(/\$/)
+    if (at < 0) out.push(name)
+    else if (at >= 3) out.push(`${name.slice(0, at)}*`)
+  }
+  for (const m of text.matchAll(/([A-Za-z0-9_.+-]+\.(?:sbatch|slurm|sh|bash|job|batch))(?![A-Za-z0-9_])/g)) out.push(m[1]!)
   return out
 }
 
@@ -612,7 +622,7 @@ function named(tokens: readonly string[], name: string): boolean {
   return tokens.some(t => (t.endsWith('*') ? name.startsWith(t.slice(0, -1)) : t === name))
 }
 
-/** The words of a command and of the scripts it runs or submits, which name the jobs it can make. */
+/** The job and script names in a command and in the scripts it runs or submits: the jobs it can make. */
 async function watchTokens($: $, command: string): Promise<string[]> {
   const cwd = await $.session.cwd()
   const texts = [command]
@@ -637,7 +647,8 @@ async function adoptWatched($: $, now: number): Promise<void> {
   const live = (await get($, 'watches')).filter(w => w.until > now)
   await put($, 'watches', () => live)
   if (!live.length) return
-  const r = await runner($)([...EPOCH, 'squeue', '--me', '-h', '-r', '-o', '%F|%j|%o|%V|%P|%Z'], { timeoutMs: 10_000 }).catch(() => null)
+  // -t all: a job that already ended (kept for MinJobAge) is still found.
+  const r = await runner($)([...EPOCH, 'squeue', '--me', '-h', '-r', '-t', 'all', '-o', '%F|%j|%o|%V|%P|%Z'], { timeoutMs: 10_000 }).catch(() => null)
   if (!r || r.exitCode !== 0) return
   const newestFirst = [...live].sort((a, b) => b.since - a.since)
   const claimed = new Map<Watch, string[]>()
@@ -659,7 +670,7 @@ async function adoptWatched($: $, now: number): Promise<void> {
 
 /** Of `ids`, the jobs whose job name or script file name is one of `tokens`. */
 async function namedBy(run: Run, ids: readonly string[], tokens: readonly string[]): Promise<string[]> {
-  const r = await run(['squeue', '--me', '-h', '-r', '-j', ids.join(','), '-o', '%F|%j|%o'], { timeoutMs: 10_000 }).catch(() => null)
+  const r = await run(['squeue', '--me', '-h', '-r', '-t', 'all', '-j', ids.join(','), '-o', '%F|%j|%o'], { timeoutMs: 10_000 }).catch(() => null)
   if (!r || r.exitCode !== 0) return []
   const ok = new Set<string>()
   for (const line of r.stdout.split('\n')) {
@@ -734,12 +745,21 @@ export const register: Register = (on, options) => {
   // ---- the main conversation's turns: when to wake it, and job groups
 
   on('turn.start', async ($, e, next) => {
+    // A subagent's or teammate's turn is not the main conversation's.
+    if (e.agentId !== undefined) return next(e)
     mainTurn = { id: e.turnId }
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
+    if (e.agentId !== undefined) {
+      // An agent's turn end is its answer: whatever it left running in the background stops being its.
+      const agent = e.agentId
+      const now = await $.clock.now()
+      await put($, 'watches', list => list.map(w => (w.owner === agent ? { ...w, until: Math.min(w.until, now + 2 * cfg.pollMs) } : w))).catch(() => undefined)
+      return r
+    }
     if (mainTurn?.id === e.turnId) {
       mainTurn = null
       idleTurn++
