@@ -19,7 +19,7 @@
 
 #SBATCH --job-name=myrun           # shows in squeue
 # #SBATCH --gres=gpu:1             # uncomment only when the workload uses a GPU
-#SBATCH --time=8:00:00             # HH:MM:SS or D-HH:MM:SS — estimate + margin, don't max it out
+#SBATCH --time=8:00:00             # HH:MM:SS or D-HH:MM:SS — slowest past run (or a pilot) x 1.5; never max it out
 #SBATCH --output=%x-%j.out         # small log in submit dir; route large logs to project storage
 # --- resource tuning (use measured needs or references/workload-allocations.md) ---
 # #SBATCH --cpus-per-task=16       # set to parallelism the workload will actually use

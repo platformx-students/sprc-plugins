@@ -142,8 +142,10 @@ This is what to do for "run / submit / kick off X". Steps, not prose:
 1. **Resolve storage.** Apply the storage gate above before downloading or creating substantial
    artifacts. Keep the chosen root for the rest of the project.
 2. **Decide resources.** Pick the fewest GPUs the work can use, CPUs matching actual parallelism,
-   memory from the expected working set, and an honest `--time` (estimate + ~25–50% margin, under
-   the QoS cap). Start from `references/workload-allocations.md` when there is no measurement yet.
+   memory from the expected working set, and an honest `--time` taken from evidence: this work's own
+   job history, or a pilot run (see "Sizing time from evidence" below), under the QoS cap. Start from
+   `references/workload-allocations.md` for shapes when there is no measurement yet. Give related
+   jobs one stable `-J` name, so their history can be found later.
 3. **Write the script.** Start from `assets/job-template.sbatch`, fill in the `#SBATCH` lines and the
    work command. Launch the actual work with `srun` inside the script. For long runs, wire up
    checkpoint/resume and add `--requeue` — jobs can hit walltime or be requeued.
@@ -284,9 +286,10 @@ that sized right?", and you should never submit the same over-sized request twic
 
 Each time a job of yours ends:
 
-1. **Measure.** `sacct -j <id> --format=JobID,State,Elapsed,Timelimit,ReqTRES%40,MaxRSS,ExitCode`
-2. **Compare** peak `MaxRSS` against the memory requested, `Elapsed` against `Timelimit`, and — if
-   you asked for more than one GPU — whether the run could actually use them.
+1. **Measure.** `sacct -j <id> --format=JobID,State,Elapsed,Timelimit,AllocCPUS,TotalCPU,ReqTRES%40,MaxRSS,ExitCode`
+2. **Compare** peak `MaxRSS` against the memory requested, `Elapsed` against `Timelimit`, CPU use
+   (`TotalCPU ÷ (Elapsed × AllocCPUS)`, from the job's own row) against the CPUs held, and — if you
+   asked for more than one GPU — whether the run could actually use them.
 3. **Correct the next submission automatically.** Don't ask permission to right-size; do it and say
    so in one line: *"last run used 38 GB of 384 GB and 2 h of 8 h — resubmitting at
    `--time=3:00:00`, which will also backfill sooner."*
@@ -299,11 +302,36 @@ Each time a job of yours ends:
 |---|---|
 | `Elapsed` well under `Timelimit` | Cut `--time` to roughly `Elapsed × 1.5`, floor ~15 min. An honest short walltime backfills sooner, so this speeds *them* up — it isn't housekeeping. |
 | `MaxRSS` far below the memory requested | Leave the default, or set `--mem` ≈ `MaxRSS × 1.3`. Never trim below the observed peak. |
+| CPU use well under ~25% of the CPUs held | Cut to what the run used plus headroom: `-c` for CPU jobs; for GPU jobs `--cpus-per-gpu` ≈ dataloader workers + 2–4 (the default is 32 per GPU). Idle CPUs still count against the per-user CPU cap and block other people's jobs on the node. Don't cut below 4, and remember memory defaults scale per CPU: set `--mem` explicitly when you cut CPUs. |
 | GPUs idle, or the code is single-GPU | Drop `--gres` to what it uses. An unused GPU is the most expensive thing you can hold against future fair-share. |
 | `State=TIMEOUT` | Raise `--time` **and** add checkpointing. You've learned "not enough", not how much — don't infer a precise value from a truncated run. |
 | `State=OUT_OF_MEMORY` | Raise memory. Never trim anything else in the same resubmission. |
 | Requeued run (`SLURM_RESTART_COUNT` > 0) | **Don't size `--time` from `Elapsed`** — it covers only the final attempt, so you will under-size and time out. |
-| First run of unfamiliar work | No measurement yet: take sane defaults, keep `--time` generous, right-size on the next one. |
+| First run of unfamiliar work | Don't guess a long walltime: look up this work's history, or run a pilot first (next section). Only when neither is possible, estimate from the work's size and throughput, use about twice that, and right-size on the next run. |
+
+### Sizing time from evidence: history first, then a pilot, then keep refining
+
+An over-long `--time` is the most common mis-size here, and it is not free: the scheduler plans
+around it, so the job backfills later and so does everyone queued behind it. Size it from evidence:
+
+1. **History first.** Before a full run, look for this work's own past runs (yours, by job name or
+   by the command that submitted them):
+   ```bash
+   sacct -X -S now-30days -P --name=<job-name> -o JobID,State,Elapsed,Timelimit,AllocTRES%60
+   sacct -X -S now-30days -P -o JobID,JobName%30,State,Elapsed,Timelimit,SubmitLine%100 | grep <script>
+   ```
+   Base `--time` on the **slowest completed comparable run**, × 1.5. A failed or cancelled run's
+   `Elapsed` is not a duration; a `TIMEOUT` only says "longer than that".
+2. **No history: run a pilot.** Submit the same script on a small slice of the work (a few hundred
+   steps, one shard, one config, 1–5% of the data) with a short `--time` (15–30 min) and the same
+   resources. From it take the startup cost, the per-unit rate from the log (steps/s, files/min),
+   peak memory and CPU use. Full `--time` ≈ (startup + units × time per unit) × 1.5. A pilot also
+   catches path, environment and OOM mistakes for minutes of queue time instead of hours.
+3. **Keep refining.** Every completed run is another data point: size the next one from the
+   slowest comparable run so far, and tighten the margin as runs agree (× 1.25 once three or more
+   land within ~20% of each other). Scale the estimate when the work changes size (twice the data
+   is roughly twice the time), and re-pilot when the code or hardware changes. Within a sweep, size
+   task N from tasks 1…N-1, not from the first guess.
 
 Two standing limits on this autonomy: **never trim a request you have no measurement for**, and
 **never trim in a way that risks the run**. An over-request costs fair-share; an under-request kills
