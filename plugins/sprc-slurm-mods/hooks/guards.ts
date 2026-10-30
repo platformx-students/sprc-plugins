@@ -64,7 +64,7 @@ export function heredocParts(command: string, depth = 0): string[] {
     for (const m of line.matchAll(/(?<!<)<<(-?)\s*\\?(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g)) {
       const before = line.slice(0, m.index)
       if (!isLiteralCode(before)) continue
-      pending.push({ word: m[3]!, tabs: m[1] === '-', runs: runsHere(before) })
+      pending.push({ word: m[3]!, tabs: m[1] === '-', runs: runsHere(before, line.slice(m.index! + m[0].length)) })
     }
   }
   // No terminator: not a heredoc after all, so nothing is hidden (fail closed).
@@ -78,12 +78,19 @@ export function heredocParts(command: string, depth = 0): string[] {
 const SHELLS = /^(bash|sh|zsh|dash|ksh|eval|source|\.)$/
 const WRAPPERS = /^(env|time|nohup|sudo|exec|command|-[A-Za-z-]+)$/
 
-/** Whether the command a `<<` belongs to (the last simple command before it) is a shell run here. */
-function runsHere(before: string): boolean {
+/**
+ * Whether a heredoc's body runs as commands here: the command it belongs to is a
+ * shell (also `su`, `sudo -s`/`-i`), or the rest of its line pipes it on into a
+ * shell, `xargs` or `parallel` (`cat <<EOF | bash`).
+ */
+function runsHere(before: string, after: string): boolean {
   const seg = before.split(/\|\||&&|[;|&(]/).pop() ?? ''
   const words = seg.trim().split(/\s+/).filter(w => w && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w))
-  const cmd = words.map(w => w.split('/').pop() ?? '').find(w => !WRAPPERS.test(w)) ?? ''
-  return SHELLS.test(cmd)
+  const names = words.map(w => w.split('/').pop() ?? '')
+  const cmd = names.find(w => !WRAPPERS.test(w)) ?? ''
+  if (SHELLS.test(cmd) || names[0] === 'su') return true
+  if (names[0] === 'sudo' && names.some(w => /^-[A-Za-z]*[si]/.test(w) && !w.startsWith('--'))) return true
+  return /\|(?!\|)\s*(?:(?:sudo|env|exec|nohup|time|command)\s+(?:-\S+\s+)*)*(?:\S*\/)?(?:bash|sh|zsh|dash|ksh|xargs|parallel|su)\b/.test(after)
 }
 
 /** Whether text ending here is outside quotes, a comment and `$(( ))`, so a `<<` that follows is a heredoc. */
