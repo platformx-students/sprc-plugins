@@ -73,9 +73,13 @@ function isLiteralCode(before: string): boolean {
   return !quote && !arith
 }
 
-/** Splits a command line into simple commands on ;, &&, ||, |, newlines. Quote-aware; heredoc bodies are skipped. */
-export function segments(command: string): string[][] {
-  command = stripHeredocs(command)
+/**
+ * Splits a command line into simple commands on ;, &&, ||, |, newlines. Quote-aware.
+ * `skipHeredocs` is for spotting submissions only: the guards always parse the raw
+ * command, so a heredoc misread can never hide a command from them.
+ */
+export function segments(command: string, skipHeredocs = false): string[][] {
+  if (skipHeredocs) command = stripHeredocs(command)
   const out: string[][] = []
   let words: string[] = []
   let word = ''
@@ -303,7 +307,7 @@ export function scriptsRun(command: string, cwd: string): string[] {
 
 /** Whether a command line runs sbatch (also inside `$( )`, a loop or a pipeline). */
 export function runsSbatch(command: string): boolean {
-  return segments(command).some(words => base(head(words)[0]) === 'sbatch') || /`\s*sbatch\b/.test(command)
+  return segments(command, true).some(words => base(head(words)[0]) === 'sbatch') || /`\s*sbatch\b/.test(command)
 }
 
 /**
