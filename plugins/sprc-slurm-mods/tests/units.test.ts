@@ -97,7 +97,10 @@ describe('submission detection', () => {
     // A heredoc that never ends hides nothing.
     expect(stripHeredocs('cat <<EOF\nbody\nsbatch a.sh')).toBe('cat <<EOF\nbody\nsbatch a.sh')
     expect(checkBash('echo "x << EOF"\ntorchrun --nproc-per-node=2 t.py', ctx).map(f => f.rule)).toContain('gpu-work-on-login-node')
-    // The guards parse the raw command, so no heredoc reading can hide a launcher from them.
+    // A quote inside a heredoc body cannot hide a launcher after it either.
+    expect(checkBash("cat > n.txt <<'EOF'\nit's\nEOF\ntorchrun --nproc-per-node=2 t.py", ctx).map(f => f.rule)).toContain('gpu-work-on-login-node')
+    expect(checkBash("cat > n.txt <<'EOF'\nit's\nEOF\ncd /tmp && sbatch job.sh", ctx).map(f => f.rule)).toEqual(['sbatch-from-tmp'])
+    // The raw reading still sees past a `<<` that only looks like a heredoc.
     expect(checkBash('((n = 1 << y))\ntorchrun --nproc-per-node=2 t.py\ny', ctx).map(f => f.rule)).toContain('gpu-work-on-login-node')
   })
   test('sbatch fed its script on stdin is still a submission', () => {

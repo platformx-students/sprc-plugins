@@ -190,10 +190,22 @@ function directive(text: string | undefined, long: string, short: string): strin
 const HEAVY = /^(torchrun|deepspeed|accelerate|vllm|sglang|python[\d.]*)$/
 const SCRATCH_DIRS = /^\/(tmp|var\/tmp|dev\/shm)(\/|$)/
 
+/**
+ * Findings over both readings of the command: raw, and with heredoc bodies
+ * skipped. Each can hide a line the other sees (a quote inside a body, or a
+ * `<<` misread as a heredoc), so a command either one finds is checked.
+ */
 export function checkBash(command: string, ctx: GuardContext): Finding[] {
+  const seen = new Set<string>()
+  return [...checkSegments(segments(command), ctx), ...checkSegments(segments(command, true), ctx)].filter(f => {
+    const key = `${f.rule}\n${f.message}`
+    return seen.has(key) ? false : (seen.add(key), true)
+  })
+}
+
+function checkSegments(segs: string[][], ctx: GuardContext): Finding[] {
   const findings: Finding[] = []
   let cwd = ctx.cwd
-  const segs = segments(command)
 
   for (let s = 0; s < segs.length; s++) {
     const words = head(segs[s]!)
@@ -266,14 +278,18 @@ export function checkBash(command: string, ctx: GuardContext): Finding[] {
  */
 export function sbatchScripts(command: string, cwd: string): { script: string; path: string }[] {
   const out: { script: string; path: string }[] = []
-  for (const seg of segments(command)) {
-    const words = head(seg)
-    const cmd = base(words[0])
-    if (cmd === 'cd' || cmd === 'pushd') cwd = words[1]?.startsWith('/') ? words[1] : ''
-    if (cmd !== 'sbatch') continue
-    const script = sbatchScript(words)
-    if (script === undefined) continue
-    out.push({ script, path: script.startsWith('/') ? script : cwd && !/^[~$]/.test(script) ? `${cwd}/${script}` : '' })
+  // Both readings, as in checkBash: a script either one finds is read.
+  for (const segs of [segments(command), segments(command, true)]) {
+    let dir = cwd
+    for (const seg of segs) {
+      const words = head(seg)
+      const cmd = base(words[0])
+      if (cmd === 'cd' || cmd === 'pushd') dir = words[1]?.startsWith('/') ? words[1] : ''
+      if (cmd !== 'sbatch') continue
+      const script = sbatchScript(words)
+      if (script === undefined || out.some(o => o.script === script)) continue
+      out.push({ script, path: script.startsWith('/') ? script : dir && !/^[~$]/.test(script) ? `${dir}/${script}` : '' })
+    }
   }
   return out
 }
