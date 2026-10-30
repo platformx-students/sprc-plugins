@@ -247,7 +247,9 @@ async function track($: $, snap: Snapshot): Promise<void> {
   for (const f of follows) done.set(f.group, [...(done.get(f.group) ?? []), f])
   const ended: Followed[] = []
   // A group a background command still feeds stays open, so a loop of submissions is one message.
-  const fed = new Set((await get($, 'watches')).filter(w => w.until > now).map(w => w.group))
+  // Only where the task's end is seen (the main conversation's notifications): an agent's watch
+  // would otherwise hold its results for the full two hours.
+  const fed = new Set((await get($, 'watches')).filter(w => w.until > now && w.owner === undefined && w.taskId).map(w => w.group))
   for (const [group, members] of done) if (!fed.has(group) && members.every(f => f.report)) ended.push(...members)
   await put($, 'followed', () => follows.filter(f => !ended.includes(f)))
   if (!ended.length) return
