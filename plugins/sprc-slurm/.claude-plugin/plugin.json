@@ -1,7 +1,7 @@
 {
   "name": "sprc-slurm",
   "description": "Run work on the lab's sprc H100 Slurm cluster (controller sprlab005): stage and submit sbatch jobs, interactive salloc GPU sessions, pick GPUs/walltime/QoS, checkpoint and requeue long runs, right-size from what the last job used, and monitor/debug \u2014 execute-first, not a tutorial.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": {
     "name": "Max Bromberg"
   },

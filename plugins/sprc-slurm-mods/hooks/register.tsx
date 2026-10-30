@@ -579,6 +579,7 @@ const REASONS: Record<string, string> = {
   DependencyNeverSatisfied: 'dependency failed; will never start (scancel it)',
   JobArrayTaskLimit: 'array throttle (%N) reached',
   QOSMaxGRESPerUser: 'at your QoS GPU limit',
+  QOSMaxCpuPerUserLimit: 'at your QoS CPU limit (--qos=scavenger has none)',
   QOSMaxJobsPerUserLimit: 'at your QoS job-count limit',
   QOSGrpGRES: 'QoS group GPU limit reached',
   AssocGrpGRESMinutes: 'GPU-minutes budget exhausted',

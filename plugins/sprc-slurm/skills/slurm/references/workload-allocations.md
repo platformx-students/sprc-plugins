@@ -39,8 +39,10 @@ use. Memory values are host RAM, not GPU VRAM.
 | Restartable GPU sweep | Batch array | Per task: `--gres=gpu:1 --cpus-per-task=4 --mem=32G`; use measured time and optionally `--qos=scavenger --requeue` |
 
 For LLM work, start with one H100 only when the weights plus KV cache fit its 94 GB VRAM. Request two
-GPUs only for demonstrated memory need or measured scaling. For arrays, cap concurrent tasks at the
-user's QoS GPU limit; `scavenger` requires checkpointing and verified resume behavior.
+GPUs only for demonstrated memory need or measured scaling. For arrays, cap concurrent tasks (`%N`)
+so they fit the user's QoS GPU limit **and** CPU limit (tasks × CPUs per task ≤ 128 on `normal`, 64 on
+`undergrad`, counting any GPU jobs already running); `scavenger` requires checkpointing and verified
+resume behavior.
 
 ## Right-size after the first run
 

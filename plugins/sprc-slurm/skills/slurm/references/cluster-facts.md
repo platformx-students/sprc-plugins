@@ -3,7 +3,8 @@
 Quote limits/defaults from here, not from memory. Verify against the live controller when it matters
 (`scontrol show config`, `sacctmgr show qos`, `scontrol show node`, `scontrol show partition`) —
 config drifts from any snapshot. Last verified against the live controller **2026-08-30**; host
-per-user caps and QoS priorities re-checked **2026-10-13**.
+per-user caps and QoS priorities re-checked **2026-10-13**; per-user CPU caps added with Sprocket 1.1
+(**2026-10-30**).
 
 ## Hardware
 
@@ -115,12 +116,21 @@ than quoting a number from here.
 A higher tier always outranks a lower one in the queue (`PriorityWeightQOS=2000000` dwarfs
 fair-share and age); fair-share and wait-time only order peers *within* the same tier.
 
-| QoS | Priority | MaxWall | MaxGPU/user | MaxSubmit/user | Preempts | Preemptable by | Self-serve? |
-|---|---|---|---|---|---|---|---|
-| `expedite` | 1000 | 24 h | 4 | — | scavenger | — | **No** — sysadmin grants per-user, auto-expires |
-| `normal` (grad default) | 500 | 3 days | 4 | 500 | scavenger | — | Yes |
-| `undergrad` (ug default) | 400 | 1 day | 2 | 200 | scavenger | — | Yes |
-| `scavenger` | 1 | 1 day | 8 | 500 | — | everyone (REQUEUE) | Yes (`--qos=scavenger`) |
+| QoS | Priority | MaxWall | MaxGPU/user | MaxCPU/user | MaxSubmit/user | Preempts | Preemptable by | Self-serve? |
+|---|---|---|---|---|---|---|---|---|
+| `expedite` | 1000 | 24 h | 4 | 128 | — | scavenger | — | **No** — granted per-user via a Sprocket Work request, auto-expires |
+| `deadline6` | 500 | 24 h | 6 | 192 | 500 | scavenger | — | **No** — Work request grant |
+| `deadline8` | 500 | 24 h | 8 | 256 | 500 | scavenger | — | **No** — Work request grant |
+| `normal` (grad default) | 500 | 3 days | 4 | 128 | 500 | scavenger | — | Yes |
+| `undergrad` (ug default) | 400 | 1 day | 2 | 64 | 200 | scavenger | — | Yes |
+| `scavenger` | 1 | 1 day | 8 | — (none) | 500 | — | everyone (REQUEUE) | Yes (`--qos=scavenger`) |
+
+- **Per-user CPU cap** (`MaxTRESPerUser cpu=`): 32 Slurm CPUs per GPU the tier allows, counted across
+  *all* of the user's jobs in that tier — **CPUs inside GPU jobs count**. Default-shaped GPU jobs hit
+  the GPU and CPU caps together; a GPU job asking more than 32 CPUs/GPU hits the CPU cap first (e.g.
+  2 GPUs × 64 CPUs = 128 fills `normal`). Over the cap → pends `QOSMaxCpuPerUserLimit`. A single
+  job whose own request exceeds its tier's cap is **rejected at submit** by `job_submit.lua` (with a
+  pointer to scavenger). Scavenger jobs don't count against the tier's cap.
 
 - **Preemption is REQUEUE, never CANCEL** (`PreemptType=preempt/qos`, `PreemptMode=REQUEUE`), and
   only `scavenger` is ever preempted. `normal`, `undergrad`, `expedite` are never auto-killed. A
@@ -132,8 +142,8 @@ fair-share and age); fair-share and wait-time only order peers *within* the same
 
 | Account | Default QoS | Also has | Per-user GPU cap |
 |---|---|---|---|
-| `grads` | `normal` | `scavenger` (+ `expedite` while granted) | 4 (`normal`), 8 (`scavenger`) |
-| `undergrads` | `undergrad` | `scavenger` | 2 (`undergrad`), 8 (`scavenger`) |
+| `grads` | `normal` | `scavenger` (+ `expedite`/`deadline6`/`deadline8` while granted) | 4 GPU / 128 CPU (`normal`), 8 GPU / no CPU cap (`scavenger`) |
+| `undergrads` | `undergrad` | `scavenger` | 2 GPU / 64 CPU (`undergrad`), 8 GPU / no CPU cap (`scavenger`) |
 
 A user must be added to one of these accounts (`sacctmgr add user`) before they can submit at all
 (`AccountingStorageEnforce=associations,limits,qos,safe`).

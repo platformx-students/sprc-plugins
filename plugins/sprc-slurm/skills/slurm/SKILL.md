@@ -245,6 +245,12 @@ Pass `--qos` only when one of these applies — otherwise say nothing about QoS:
   GPUs (up to all 8), lowest priority, **requeued the instant a real job needs the GPU**. The
   good-neighbor choice for bulk work — but only if it actually checkpoints. Pair with a job array.
   **Batch only** — an interactive `salloc --qos=scavenger` is rejected; use `sbatch`.
+- **Past the per-user CPU cap.** Each research tier caps the CPUs one user holds at once, CPUs inside
+  GPU jobs included: **128 on `normal`/`expedite`, 64 on `undergrad`** (32 per allowed GPU; see
+  `references/cluster-facts.md`). `scavenger` has no CPU cap, so CPU work beyond the cap goes there
+  (same checkpoint caveat, 1-day wall). Size so the default tier holds what fits — e.g. a 16-CPU array
+  with `%8` in the default tier plus a second array on `--qos=scavenger` — rather than letting tasks
+  pend on `QOSMaxCpuPerUserLimit`. A single job over the cap is **rejected at submit**.
 - **`--qos=expedite`** for a genuine deadline — but it's **sysadmin-granted per user** and not
   self-serve. If the user needs it, tell them to ask; until granted, `--qos=expedite` is rejected.
   (It's also the one QoS exempt from the interactive 1 h cap, so a granted user's `salloc` runs its
@@ -262,7 +268,8 @@ sacct -j <id> --format=JobID,State,Elapsed,MaxRSS,ExitCode    # post-mortem
 
 When a job won't start or fails, **read the `Reason=` before changing flags** — don't shotgun. Most
 common: `Priority`/`Resources` = just waiting; `QOSMaxGRESPerUser` = at your per-user GPU cap (4 on
-`normal`), running jobs must free one — not routable around; killed at walltime = raise `--time` +
+`normal`), running jobs must free one — not routable around; `QOSMaxCpuPerUserLimit` = at your
+per-user CPU cap (128 on `normal`), wait or move restartable work to `--qos=scavenger`; killed at walltime = raise `--time` +
 checkpoint; OOM = raise `--mem`. The full error→cause→fix table is `references/troubleshooting.md` —
 consult it for anything non-obvious, and explain to the user only what they need.
 
