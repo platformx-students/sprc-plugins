@@ -31,19 +31,46 @@ export type GuardContext = {
  */
 export function stripHeredocs(command: string): string {
   const out: string[] = []
+  let body: string[] = []
   const pending: { word: string; tabs: boolean }[] = []
   for (const line of command.split('\n')) {
     if (pending.length) {
+      body.push(line)
       const d = pending[0]!
-      if ((d.tabs ? line.replace(/^\t+/, '') : line) === d.word) pending.shift()
+      if ((d.tabs ? line.replace(/^\t+/, '') : line) === d.word) {
+        pending.shift()
+        if (!pending.length) body = []
+      }
       continue
     }
     out.push(line)
     for (const m of line.matchAll(/(?<!<)<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g)) {
+      if (!isLiteralCode(line.slice(0, m.index))) continue
       pending.push({ word: m[3]!, tabs: m[1] === '-' })
     }
   }
-  return out.join('\n')
+  // No terminator: not a heredoc after all, so nothing is hidden (fail closed).
+  return [...out, ...body].join('\n')
+}
+
+/** Whether text ending here is outside quotes, a comment and `$(( ))`, so a `<<` that follows is a heredoc. */
+function isLiteralCode(before: string): boolean {
+  let quote: string | null = null
+  let arith = 0
+  for (let i = 0; i < before.length; i++) {
+    const c = before[i]!
+    if (quote) {
+      if (c === quote) quote = null
+      else if (c === '\\' && quote === '"') i++
+      continue
+    }
+    if (c === '\\') i++
+    else if (c === '"' || c === "'") quote = c
+    else if (c === '#' && (i === 0 || /\s/.test(before[i - 1]!))) return false
+    else if (before.startsWith('$((', i)) (arith++, (i += 2))
+    else if (before.startsWith('))', i) && arith) (arith--, i++)
+  }
+  return !quote && !arith
 }
 
 /** Splits a command line into simple commands on ;, &&, ||, |, newlines. Quote-aware; heredoc bodies are skipped. */
