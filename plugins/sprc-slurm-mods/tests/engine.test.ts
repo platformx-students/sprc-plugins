@@ -26,6 +26,10 @@ type Cluster = {
   files: Record<string, string>
   /** Tools the mod registered. */
   tools: string[]
+  /** Background task ids to hand back for these commands, as Bash does when it backgrounds one. */
+  bgTask: Record<string, string>
+  /** Jobs gone from the queue that sacct still knows: id, submit time, owner. */
+  ended: { id: string; submit: string; user: string }[]
   /** What the next sbatch puts in the queue. */
   onBash?: (command: string) => void
 }
@@ -37,7 +41,8 @@ function fakeCluster(on: On, c: Cluster) {
     const command = (e as { command?: string }).command ?? ''
     c.onBash?.(command)
     const out = c.bashOutput[command] ?? ''
-    return { result: out, text: out } as never
+    const task = c.bgTask[command]
+    return { result: task ? { stdout: out, stderr: '', interrupted: false, backgroundTaskId: task } : out, text: out } as never
   })
   // The host side of the rest of what the mod calls.
   on('command.register', ($, e) => ({ value: { command: e.name } }))
@@ -62,8 +67,12 @@ function fakeCluster(on: On, c: Cluster) {
     return { text: e.text }
   })
   on('process.run', ($, e) => ({ value: { isStdoutTruncated: false, isStderrTruncated: false, ...answer(e.argv, e.init?.timeoutMs) } }))
-  function answer(argv: readonly string[], timeoutMs?: number) {
-    c.calls.push([...argv])
+  function answer(full: readonly string[], timeoutMs?: number) {
+    c.calls.push([...full])
+    // `env SLURM_TIME_FORMAT=%s cmd …`: times become epoch seconds.
+    const epoch = full[0] === 'env' && full.includes('SLURM_TIME_FORMAT=%s')
+    const argv = full[0] === 'env' ? full.slice(full.findIndex((a, i) => i > 0 && !a.includes('='))) : full
+    const time = (t: string) => (epoch ? String(Date.parse(t) / 1000) : t)
     if (timeoutMs !== undefined && timeoutMs > 600_000) throw new Error('timeoutMs over ten minutes')
     const [cmd] = argv
     const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: '' })
@@ -77,12 +86,22 @@ function fakeCluster(on: On, c: Cluster) {
     }
     // Fields by position in row(): 0 id, 1 user, 10 submit, 11 name.
     const mine = () => c.queue.filter(l => l.split('|')[1] === 'me')
+    // %F is an array task's array id, as squeue prints it.
+    const F = (l: string) => l.split('|')[0]!.replace(/_.*/, '')
+    const onlyJ = (lines: string[]) => (has('-j') ? lines.filter(l => pick(argv[argv.indexOf('-j') + 1]!).includes(F(l))) : lines)
     if (cmd === 'squeue' && has('%F|%V')) {
-      const ids = pick(argv[argv.indexOf('-j') + 1]!)
-      return ok(mine().filter(l => ids.includes(l.split('|')[0]!)).map(l => `${l.split('|')[0]}|${l.split('|')[10]}\n`).join(''))
+      return ok(onlyJ(mine()).map(l => `${F(l)}|${time(l.split('|')[10]!)}\n`).join(''))
     }
-    if (cmd === 'squeue' && has('%F|%j|%o|%V')) {
-      return ok(mine().map(l => { const f = l.split('|'); return `${f[0]}|${f[11]}|/home/me/proj/${f[11]}.sh|${f[10]}\n` }).join(''))
+    // %o is the script: <job name>.sbatch in the project; %P from the row; %Z the project.
+    if (cmd === 'squeue' && has('%F|%j|%o|%V|%P|%Z')) {
+      return ok(mine().map(l => { const f = l.split('|'); return `${f[0]}|${f[11]}|/home/me/proj/${f[11]}.sbatch|${time(f[10]!)}|${f[8]}|/home/me/proj\n` }).join(''))
+    }
+    if (cmd === 'squeue' && has('%F|%j|%o')) {
+      return ok(onlyJ(mine()).map(l => { const f = l.split('|'); return `${f[0]}|${f[11]}|/home/me/proj/${f[11]}.sbatch\n` }).join(''))
+    }
+    if (cmd === 'sacct' && has('JobID,Submit,User')) {
+      const ids = pick(argv[argv.indexOf('-j') + 1]!)
+      return ok(c.ended.filter(e => ids.includes(e.id)).map(e => `${e.id}|${time(e.submit)}|${e.user}\n`).join(''))
     }
     if (cmd === 'squeue' && has('%F')) {
       const lines = c.queue.filter(l => !has('--me') || l.split('|')[1] === 'me')
@@ -110,6 +129,8 @@ function newCluster(): Cluster {
     bashOutput: {},
     files: {},
     tools: [],
+    bgTask: {},
+    ended: [],
   }
 }
 
@@ -264,9 +285,12 @@ describe('on a fake cluster', () => {
     c.files['/home/me/proj/e2e/submit.sh'] = '#!/bin/sh\nJID=$(sbatch --parsable run.sbatch)\n'
     const cmd = 'JOB_NAME=x sh e2e/submit.sh --go'
     c.onBash = command => {
-      if (command === cmd) c.queue.push(at(row('96002', 'me', 'PD', 'x'), NEW))
+      // Another session of mine submits at the same moment; only the script's own job is taken.
+      if (command === cmd) c.queue.push(at(row('96002', 'me', 'PD', 'run'), NEW), at(row('96010', 'me', 'PD', 'elsewhere'), NEW))
     }
-    expect(JSON.stringify(await bash($, cmd))).toContain('Following 96002')
+    const r = JSON.stringify(await bash($, cmd))
+    expect(r).toContain('Following 96002')
+    expect(r).not.toContain('96010')
   })
 
   test("sbatch's line printed by any command is followed only for a job submitted while it ran", async ($, on) => {
@@ -281,25 +305,66 @@ describe('on a fake cluster', () => {
     expect(JSON.stringify(await bash($, 'tail logs/run.out'))).not.toContain('Following')
   })
 
-  test('a background command that submits is followed from the queue, and reported once', async ($, on) => {
+  test('a background command: its jobs are adopted by name, reported once its task has ended', async ($, on) => {
     const c = newCluster()
     fakeCluster(on, c)
     const clock = mock.clock(on, { now: T0 })
     await start($)
-    const cmd = 'sleep 120; sbatch train.sh'
+    const cmd = 'sleep 120; for s in 1 2; do sbatch train.sbatch $s; done'
+    c.bgTask[cmd] = 'b7'
     const r = await bash($, cmd, { run_in_background: true })
     expect(JSON.stringify(r)).toContain('followed as they reach the queue')
-    // Someone else's session's job (another name) is not adopted; this one is.
-    c.queue.push(at(row('96004', 'me', 'PD', 'train'), NEW), at(row('96005', 'me', 'PD', 'unrelated'), NEW))
+    // Its job is taken; a job of mine with another name, and an interactive shell, are not.
+    c.queue.push(at(row('96004', 'me', 'PD', 'train'), NEW), at(row('96005', 'me', 'PD', 'unrelated'), NEW), at(row('96006', 'me', 'R', 'bash'), NEW))
     await clock.advance(31_000)
-    expect(text(await $.tool.call({ tool: 'mcp__sprc-slurm-mods__sprc_status' } as never))).toContain('96004')
+    const status = text(await $.tool.call({ tool: 'mcp__sprc-slurm-mods__sprc_status' } as never))
+    expect(status).toContain('Following: 96004')
+    // It ends while the loop is still running: no message yet, the group is still being fed.
     c.queue = c.queue.filter(l => !l.startsWith('96004|'))
     c.sacct.push(sacctRow('96004', 'train'))
     await clock.advance(31_000)
     await clock.advance(31_000)
-    expect(c.prompts.length).toBe(1)
-    expect(c.prompts[0]).toContain('96004')
-    expect(c.prompts[0]).not.toContain('96005')
+    expect(c.prompts).toEqual([])
+    // The task's notification ends the watch; one more poll, then one message.
+    await $.prompt.submit({ text: '<task-notification><task-id>b7</task-id><status>completed</status></task-notification>', origin: { kind: 'task-notification' } } as never)
+    for (let i = 0; i < 4; i++) await clock.advance(31_000)
+    expect(c.prompts.some(p => p.includes('96004'))).toBe(true)
+    expect(c.prompts.join('\n')).not.toContain('96005')
+  })
+
+  test("a printed line or a mention never adopts another session's job or an old one", async ($, on) => {
+    const c = newCluster()
+    fakeCluster(on, c)
+    mock.clock(on, { now: T0 })
+    await start($)
+    c.queue.push(at(row('70002', 'me', 'R', 'old'), OLD))
+    c.bashOutput['grep -rn sbatch logs/'] = 'logs/a.out:1:Submitted batch job 70002'
+    expect(JSON.stringify(await bash($, 'grep -rn sbatch logs/'))).not.toContain('Following')
+    c.onBash = command => {
+      if (command === 'cat train.sbatch') c.queue.push(at(row('96020', 'me', 'PD', 'other-session'), NEW))
+    }
+    expect(JSON.stringify(await bash($, 'cat train.sbatch'))).not.toContain('Following')
+  })
+
+  test('a job that failed before the check is still followed, from sacct', async ($, on) => {
+    const c = newCluster()
+    fakeCluster(on, c)
+    mock.clock(on, { now: T0 })
+    await start($)
+    c.bashOutput['make go'] = 'Submitted batch job 96030'
+    c.ended.push({ id: '96030', submit: NEW, user: 'me' })
+    expect(JSON.stringify(await bash($, 'make go'))).toContain('Following 96030')
+  })
+
+  test('a subagent is told how to wait when it needs the result', async ($, on) => {
+    const c = newCluster()
+    fakeCluster(on, c)
+    mock.clock(on, { now: T0 })
+    await start($)
+    c.bashOutput['sbatch a.sbatch'] = 'Submitted batch job 96040'
+    c.queue.push(at(row('96040', 'me', 'PD', 'a'), NEW))
+    const r = JSON.stringify(await bash($, 'sbatch a.sbatch', { agentId: 'agent-1' }))
+    expect(r).toContain('sbatch --wait')
   })
 
   test('following someone else\'s job is refused, and an ended one answers at once', async ($, on) => {

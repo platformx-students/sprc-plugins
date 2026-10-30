@@ -44,7 +44,8 @@ export function stripHeredocs(command: string): string {
       continue
     }
     out.push(line)
-    for (const m of line.matchAll(/(?<!<)<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g)) {
+    // <<EOF, <<-EOF, <<'EOF', <<"EOF" and <<\EOF.
+    for (const m of line.matchAll(/(?<!<)<<(-?)\s*\\?(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g)) {
       if (!isLiteralCode(line.slice(0, m.index))) continue
       pending.push({ word: m[3]!, tabs: m[1] === '-' })
     }

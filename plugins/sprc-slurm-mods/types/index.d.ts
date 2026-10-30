@@ -93,6 +93,24 @@ export type Notice = {
   at: number
 }
 
+/** A background command that may submit jobs; the poll adopts what it submits. */
+export type Watch = {
+  owner?: string
+  group: string
+  /** The background task running it; its notification ends the watch. */
+  taskId?: string
+  /** Queue top and time (ms) when it started: only newer jobs are its. */
+  top: number
+  since: number
+  /** When it stops adopting: soon after its task ends, two hours at most. */
+  until: number
+  /** Whole words of the command and of the scripts it runs: job and script names it may submit. */
+  tokens: string[]
+  /** Where it ran, for `--wrap` jobs, which carry no name of their own. */
+  cwd: string
+  wrap: boolean
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'sprc-slurm-mods': {
@@ -100,6 +118,7 @@ declare module 'claude-code' {
       followed: Followed[]
       finished: JobReport[]
       outbox: Notice[]
+      watches: Watch[]
       isEnabled: boolean
     }
   }

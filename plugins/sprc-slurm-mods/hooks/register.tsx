@@ -1,6 +1,6 @@
 import type { EngineInterface, PluginState, Register } from 'claude-code'
 
-import type { Followed, JobReport, Notice, Snapshot } from '../types'
+import type { Followed, JobReport, Notice, Snapshot, Watch } from '../types'
 import { checkBash, runsSbatch, sbatchScripts, scriptsRun, submittedJobs } from './guards'
 import type { Finding } from './guards'
 import {
@@ -28,6 +28,7 @@ const REF_snapshot = { plugin: 'sprc-slurm-mods', key: 'snapshot' } as const
 const REF_followed = { plugin: 'sprc-slurm-mods', key: 'followed' } as const
 const REF_finished = { plugin: 'sprc-slurm-mods', key: 'finished' } as const
 const REF_outbox = { plugin: 'sprc-slurm-mods', key: 'outbox' } as const
+const REF_watches = { plugin: 'sprc-slurm-mods', key: 'watches' } as const
 const REF_isEnabled = { plugin: 'sprc-slurm-mods', key: 'isEnabled' } as const
 
 // Slurm's own words and cluster phrases only: "job", "node" or "queue" alone
@@ -54,6 +55,8 @@ async function load<K extends keyof S>($: $, k: K): Promise<S[K]> {
       return ((await $.state.get(REF_finished)).value ?? []) as S[K]
     case 'outbox':
       return ((await $.state.get(REF_outbox)).value ?? []) as S[K]
+    case 'watches':
+      return ((await $.state.get(REF_watches)).value ?? []) as S[K]
     case 'isEnabled':
       return ((await $.state.get(REF_isEnabled)).value ?? false) as S[K]
   }
@@ -81,6 +84,9 @@ async function put<K extends keyof S>($: $, k: K, fn: (v: S[K]) => S[K]): Promis
     case 'outbox':
       await $.state.set(REF_outbox, v as S['outbox'])
       break
+    case 'watches':
+      await $.state.set(REF_watches, v as S['watches'])
+      break
     case 'isEnabled':
       await $.state.set(REF_isEnabled, v as S['isEnabled'])
       break
@@ -103,12 +109,12 @@ let idleTurn = 0
 const toldFollowing = new Set<string>()
 const toldRules = new Set<string>()
 const seenAdvice = new Set<string>()
-// Background Bash commands that may submit jobs. The hook never sees their
-// output, so each poll adopts the person's new jobs that match the command
-// (by job name, script name, or --wrap) for a while after it started.
-type Watch = { owner: string | undefined; group: string; top: number; since: number; until: number; text: string }
-let watches: Watch[] = []
+// Background Bash commands that may submit jobs (state `watches`): the hook
+// never sees their output, so each poll adopts the person's new jobs that the
+// command or its scripts name, until the task's notification arrives.
 const WATCH_MS = 2 * 60 * 60_000
+// Job names an interactive salloc/srun gets, which no batch submission means.
+const SHELL_NAMES = new Set(['bash', 'sh', 'zsh', 'interactive'])
 
 function runner($: $): Run {
   return (argv, init) => $.process.run(argv, { timeoutMs: init?.timeoutMs ?? 20_000 })
@@ -240,7 +246,9 @@ async function track($: $, snap: Snapshot): Promise<void> {
   const done = new Map<string, Followed[]>()
   for (const f of follows) done.set(f.group, [...(done.get(f.group) ?? []), f])
   const ended: Followed[] = []
-  for (const [, members] of done) if (members.every(f => f.report)) ended.push(...members)
+  // A group a background command still feeds stays open, so a loop of submissions is one message.
+  const fed = new Set((await get($, 'watches')).filter(w => w.until > now).map(w => w.group))
+  for (const [group, members] of done) if (!fed.has(group) && members.every(f => f.report)) ended.push(...members)
   await put($, 'followed', () => follows.filter(f => !ended.includes(f)))
   if (!ended.length) return
 
@@ -297,7 +305,7 @@ async function poll($: $, isTimer = false): Promise<void> {
   if (isPolling || !user) return
   const now = await $.clock.now()
   if (isTimer && now - lastPollAt < 4 * cfg.pollMs - 1000) {
-    const isIdle = (await get($, 'followed')).length === 0 && (await get($, 'outbox')).length === 0 && !watches.length
+    const isIdle = (await get($, 'followed')).length === 0 && (await get($, 'outbox')).length === 0 && (await get($, 'watches')).length === 0
     if (isIdle) return
   }
   isPolling = true
@@ -543,8 +551,10 @@ async function mineAbove(run: Run, floor: number): Promise<string[]> {
   return [...new Set(r.stdout.split('\n').map(l => l.trim()).filter(l => Number(l) > floor))]
 }
 
-/** What to do while followed jobs run, true to the `wake` setting. */
-function resultsLine(): string {
+/** What to do while followed jobs run: for the main conversation true to `wake`; a subagent's turn end is its final answer. */
+function resultsLine(owner: string | undefined): string {
+  if (owner !== undefined)
+    return 'keep working, and the results arrive as a message. If your final answer needs a result, do not finish first: wait for it in the background (`sbatch --wait` run in the background, or a background `while squeue -h -j <id> | grep -q .; do sleep 60; done`).'
   return cfg.wake
     ? 'end your turn or keep working, and the results start a new turn (or ride on your next tool result) when they are in.'
     : 'keep working, or end your turn: the results arrive with the next message (waking is off).'
@@ -560,40 +570,97 @@ async function runsSubmitScript($: $, command: string): Promise<boolean> {
   return false
 }
 
-/** Of `ids`, your jobs still queued that were submitted at or after `since` (ms). */
+// Slurm prints times in the person's SLURM_TIME_FORMAT (which can be "relative")
+// and local time; epoch seconds read the same in every setting and time zone.
+const EPOCH = ['env', 'SLURM_TIME_FORMAT=%s']
+
+/** Of `ids`, your jobs submitted at or after `since` (ms): in the queue, or already ended (sacct). */
 async function submittedSince(run: Run, ids: readonly string[], since: number): Promise<string[]> {
-  const r = await run(['squeue', '--me', '-h', '-r', '-j', ids.join(','), '-o', '%F|%V'], { timeoutMs: 10_000 }).catch(() => null)
+  const at = new Map<string, number>()
+  const q = await run([...EPOCH, 'squeue', '--me', '-h', '-r', '-j', ids.join(','), '-o', '%F|%V'], { timeoutMs: 10_000 }).catch(() => null)
+  for (const line of q?.exitCode === 0 ? q.stdout.split('\n') : []) {
+    const [id, submit] = line.trim().split('|')
+    if (id) at.set(parentId(id), Number(submit) * 1000)
+  }
+  // A job that failed in its first seconds has already left the queue: the case most worth reporting.
+  const gone = ids.filter(id => !at.has(parentId(id)))
+  if (gone.length) {
+    const a = await run([...EPOCH, 'sacct', '-X', '-n', '-P', '-j', gone.join(','), '-o', 'JobID,Submit,User'], { timeoutMs: 10_000 }).catch(() => null)
+    for (const line of a?.exitCode === 0 ? a.stdout.split('\n') : []) {
+      const [id, submit, who] = line.trim().split('|')
+      if (id && who === user) at.set(parentId(id), Number(submit) * 1000)
+    }
+  }
+  return [...new Set(ids.map(parentId))].filter(id => (at.get(id) ?? NaN) >= since - 5000)
+}
+
+/** Whole words of 3+ characters: names a job or script could be given. */
+function words(text: string): string[] {
+  return text.split(/[^A-Za-z0-9_.+-]+/).filter(w => w.length >= 3)
+}
+
+/** The words of a command and of the scripts it runs or submits, which name the jobs it can make. */
+async function watchTokens($: $, command: string): Promise<string[]> {
+  const cwd = await $.session.cwd()
+  const texts = [command]
+  const paths = [...scriptsRun(command, cwd), ...sbatchScripts(command, cwd).map(s => s.path).filter(Boolean)]
+  for (const path of [...new Set(paths)].slice(0, 4)) {
+    const text = await $.fs.read(path).catch(() => null)
+    if (text !== null) texts.push(text.slice(0, 100_000))
+  }
+  return [...new Set(texts.flatMap(words))].slice(0, 5000)
+}
+
+/**
+ * Adopts the person's new jobs for the background commands still watched. A
+ * job is a watch's when it is newer than the watch (queue top and submit
+ * time), is a batch job (not debug, not a bare shell), and the watch's words
+ * name it: its job name, or its script's file name. A --wrap job has no name
+ * of its own, so it also has to have run in the watched command's directory.
+ * The newest matching watch takes it, so an older one never claims another
+ * loop's later job.
+ */
+async function adoptWatched($: $, now: number): Promise<void> {
+  const live = (await get($, 'watches')).filter(w => w.until > now)
+  await put($, 'watches', () => live)
+  if (!live.length) return
+  const r = await runner($)([...EPOCH, 'squeue', '--me', '-h', '-r', '-o', '%F|%j|%o|%V|%P|%Z'], { timeoutMs: 10_000 }).catch(() => null)
+  if (!r || r.exitCode !== 0) return
+  const newestFirst = [...live].sort((a, b) => b.since - a.since)
+  const claimed = new Map<Watch, string[]>()
+  for (const line of r.stdout.split('\n')) {
+    const [id, name = '', cmd = '', submit, part, dir = ''] = line.trim().split('|')
+    if (!id || part === 'debug' || SHELL_NAMES.has(name)) continue
+    const at = Number(submit) * 1000
+    const file = cmd.split('/').pop() ?? ''
+    const w = newestFirst.find(
+      w =>
+        Number(id) > w.top &&
+        at >= w.since - 5000 &&
+        (w.tokens.includes(name) || (file.length >= 3 && w.tokens.includes(file)) || (name === 'wrap' && w.wrap && dir === w.cwd)),
+    )
+    if (w) claimed.set(w, [...(claimed.get(w) ?? []), id])
+  }
+  for (const [w, ids] of claimed) await follow($, ids, w.owner, 'sbatch', w.group)
+}
+
+/** Of `ids`, the jobs whose job name or script file name is one of `tokens`. */
+async function namedBy(run: Run, ids: readonly string[], tokens: readonly string[]): Promise<string[]> {
+  const r = await run(['squeue', '--me', '-h', '-r', '-j', ids.join(','), '-o', '%F|%j|%o'], { timeoutMs: 10_000 }).catch(() => null)
   if (!r || r.exitCode !== 0) return []
   const ok = new Set<string>()
   for (const line of r.stdout.split('\n')) {
-    const [id, submit] = line.trim().split('|')
-    const at = Date.parse(submit ?? '')
-    if (id && Number.isFinite(at) && at >= since - 5000) ok.add(id)
+    const [id, name = '', cmd = ''] = line.trim().split('|')
+    const file = cmd.split('/').pop() ?? ''
+    if (id && (tokens.includes(name) || (file.length >= 3 && tokens.includes(file)))) ok.add(id)
   }
   return [...ok]
 }
 
-/**
- * Adopts the person's new jobs for each background command still watched: above
- * the queue top when it started, submitted after it started, and named by it
- * (job name or script file name in its text, or a --wrap job from a --wrap command).
- */
-async function adoptWatched($: $, now: number): Promise<void> {
-  watches = watches.filter(w => w.until > now)
-  if (!watches.length) return
-  const r = await runner($)(['squeue', '--me', '-h', '-r', '-o', '%F|%j|%o|%V'], { timeoutMs: 10_000 }).catch(() => null)
-  if (!r || r.exitCode !== 0) return
-  const rows = r.stdout.split('\n').map(l => l.trim().split('|')).filter(c => c.length >= 4)
-  for (const w of watches) {
-    const ids = rows
-      .filter(([id, name, cmd, submit]) => {
-        if (!(Number(id) > w.top) || !(Date.parse(submit!) >= w.since - 5000)) return false
-        const file = (cmd ?? '').split('/').pop() ?? ''
-        return (name !== '' && name !== 'wrap' && w.text.includes(name!)) || (file.length > 2 && w.text.includes(file)) || (name === 'wrap' && w.text.includes('--wrap'))
-      })
-      .map(([id]) => id!)
-    if (ids.length) await follow($, ids, w.owner, 'sbatch', w.group)
-  }
+/** A background task's end ends its watch, after one more poll for jobs still reaching the queue. */
+async function endWatch($: $, taskId: string): Promise<void> {
+  const now = await $.clock.now()
+  await put($, 'watches', list => list.map(w => (w.taskId === taskId ? { ...w, until: Math.min(w.until, now + 2 * cfg.pollMs) } : w)))
 }
 
 async function guardFindings($: $, command: string): Promise<Finding[]> {
@@ -719,12 +786,15 @@ export const register: Register = (on, options) => {
 
     // Everything the mod does here is advisory: if it fails, the command runs as if the mod were not there.
     let findings: Finding[] = []
+    // Runs sbatch as a command, or a script whose text calls it. A bare mention
+    // (`cat x.sbatch`, `grep sbatch`) is not a submission.
     let isSubmit = false
+    let isViaScript = false
     let top = Infinity
     const startedAt = await $.clock.now()
     try {
-      // sbatch anywhere in the text (a heredoc'd script, a loop) or in a script the command runs.
-      isSubmit = runsSbatch(command) || /\bsbatch\b/.test(command) || (await runsSubmitScript($, command))
+      isSubmit = runsSbatch(command)
+      if (!isSubmit) isSubmit = isViaScript = await runsSubmitScript($, command)
       if (isGuarded) findings = await guardFindings($, command)
       if (isSubmit) top = await queueTop(runner($))
     } catch (err) {
@@ -744,33 +814,50 @@ export const register: Register = (on, options) => {
         .filter(f => f.level === 'reject' || !toldRules.has(f.rule))
         .map(f => (toldRules.add(f.rule), `[sprc guard] ${f.message}`))
       const loop = loopKey(e.agentId)
-      if (e.run_in_background) {
-        // Its output never comes back here: the poll adopts what it submits.
-        if (isSubmit && Number.isFinite(top)) {
-          watches.push({ owner: e.agentId, group: groupKey(e.agentId), top, since: startedAt, until: startedAt + WATCH_MS, text: command })
-          notes.push(`[sprc] Jobs this background command submits are followed as they reach the queue; ${resultsLine()}`)
-          void poll($)
-        }
-      } else {
-        const out = ran.text ?? ''
-        let ids = submittedJobs(out, isSubmit && /--parsable\b/.test(command))
-        // A command that is not a known submitter but printed sbatch's line (a wrapper, a Makefile):
-        // keep only jobs of yours submitted while it ran, so a printed log of old jobs is ignored.
-        if (ids.length && !isSubmit) ids = await submittedSince(runner($), ids, startedAt)
-        // `JID=$(sbatch --parsable …)` prints nothing: the queue says what is new.
-        if (!ids.length && isSubmit) ids = await mineAbove(runner($), top)
-        const fresh = await follow($, ids, e.agentId, 'sbatch')
-        if (fresh.length) {
-          notes.push(
-            toldFollowing.has(loop)
-              ? `[sprc] Following ${idRanges(fresh)}.`
-              : `[sprc] Following ${idRanges(fresh)}${fresh.length > 1 ? ' as a group' : ''}: when ${fresh.length > 1 ? 'they have all' : 'it has'} ended you get one message with results, failures, log paths and right-sizing. Every job you submit is followed this way, so never wait or poll for it: ${resultsLine()}`,
-          )
-          toldFollowing.add(loop)
-          $.ui.toast(`following ${fresh.length === 1 ? `job ${fresh[0]}` : `${fresh.length} jobs`}`)
-          void poll($)
+      const out = ran.text ?? ''
+      // Started in the background, or moved there by a timeout or Ctrl+B: the rest of its output never comes back here.
+      const taskId = (ran.result as { backgroundTaskId?: unknown } | undefined)?.backgroundTaskId
+      const isBackground = e.run_in_background === true || typeof taskId === 'string'
+
+      // What it printed so far: sbatch's own line, or --parsable ids. Only jobs submitted while it ran,
+      // so a log of old jobs (or another session's) is never adopted.
+      let ids = submittedJobs(out, isSubmit && /--parsable\b/.test(command))
+      if (ids.length) ids = await submittedSince(runner($), ids, startedAt)
+      // `JID=$(sbatch --parsable …)` prints nothing: the queue says what is new.
+      if (!ids.length && isSubmit && !isBackground) {
+        ids = await mineAbove(runner($), top)
+        // A script that only mentions sbatch must also name the job, so another session's isn't taken.
+        if (ids.length && isViaScript) ids = await namedBy(runner($), ids, await watchTokens($, command))
+      }
+      const fresh = await follow($, ids, e.agentId, 'sbatch')
+      if (fresh.length) {
+        notes.push(
+          toldFollowing.has(loop)
+            ? `[sprc] Following ${idRanges(fresh)}.`
+            : `[sprc] Following ${idRanges(fresh)}${fresh.length > 1 ? ' as a group' : ''}: when ${fresh.length > 1 ? 'they have all' : 'it has'} ended you get one message with results, failures, log paths and right-sizing. Every job you submit is followed this way, so never block on it: ${resultsLine(e.agentId)}`,
+        )
+        toldFollowing.add(loop)
+        $.ui.toast(`following ${fresh.length === 1 ? `job ${fresh[0]}` : `${fresh.length} jobs`}`)
+      }
+      if (isBackground && (isSubmit || /\bsbatch\b/.test(command))) {
+        if (!Number.isFinite(top)) top = await queueTop(runner($))
+        if (Number.isFinite(top)) {
+          const watch: Watch = {
+            owner: e.agentId,
+            group: groupKey(e.agentId),
+            taskId: typeof taskId === 'string' ? taskId : undefined,
+            top,
+            since: startedAt,
+            until: startedAt + WATCH_MS,
+            tokens: await watchTokens($, command),
+            cwd: await $.session.cwd(),
+            wrap: /--wrap\b/.test(command),
+          }
+          await put($, 'watches', list => [...list, watch])
+          notes.push(`[sprc] Jobs this background command submits are followed as they reach the queue (by the job or script names it uses); ${resultsLine(e.agentId)}`)
         }
       }
+      if (fresh.length || isBackground) void poll($)
       if (!notes.length) return ran
       return { ...ran, context: [...(ran.context ?? []), ...notes] }
     } catch (err) {
@@ -797,6 +884,9 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     if (e.origin.kind === 'plugin' || !(await get($, 'isEnabled').catch(() => false))) return next(e)
+    if (e.origin.kind === 'task-notification') {
+      for (const m of e.text.matchAll(/<task-id>([^<\s]+)<\/task-id>/g)) await endWatch($, m[1]!).catch(() => undefined)
+    }
     const context = [...(e.context ?? [])]
     try {
       context.push(...(await takeNotices($, undefined)))

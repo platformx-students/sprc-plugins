@@ -94,6 +94,7 @@ describe('submission detection', () => {
     expect(stripHeredocs('echo "a << EOF"\ntorchrun x.py')).toBe('echo "a << EOF"\ntorchrun x.py')
     expect(stripHeredocs('n=$((1<<y))\nsbatch a.sh')).toBe('n=$((1<<y))\nsbatch a.sh')
     expect(stripHeredocs('# see <<EOF\nsbatch a.sh')).toBe('# see <<EOF\nsbatch a.sh')
+    expect(stripHeredocs("cat > a <<\\EOF\nit's\nEOF\nsbatch a")).toBe('cat > a <<\\EOF\nsbatch a')
     // A heredoc that never ends hides nothing.
     expect(stripHeredocs('cat <<EOF\nbody\nsbatch a.sh')).toBe('cat <<EOF\nbody\nsbatch a.sh')
     expect(checkBash('echo "x << EOF"\ntorchrun --nproc-per-node=2 t.py', ctx).map(f => f.rule)).toContain('gpu-work-on-login-node')
