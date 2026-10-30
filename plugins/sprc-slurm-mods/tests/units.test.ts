@@ -104,6 +104,9 @@ describe('submission detection', () => {
     expect(checkBash('bash <<EOF\ntorchrun --nproc-per-node=2 t.py\nEOF', ctx).map(f => f.rule)).toContain('gpu-work-on-login-node')
     expect(checkBash("cd /p && python3 - <<'PY'\nimport os\nPY\nbash -s <<'EOF'\ncd /tmp\nsbatch j.sh\nEOF", ctx).map(f => f.rule)).toEqual(['sbatch-from-tmp'])
     expect(checkBash('sudo env bash <<EOF\ntorchrun --nproc-per-node=2 t.py\nEOF', ctx).map(f => f.rule)).toContain('gpu-work-on-login-node')
+    // A nested heredoc inside a shell body is text, and its quotes stay inside it.
+    expect(checkBash("bash <<'EOF'\ncat > n.txt <<'X'\nit's\nX\ntorchrun --nproc-per-node=2 t.py\nEOF\ncd /tmp && sbatch j.sh", ctx).map(f => f.rule).sort()).toEqual(['gpu-work-on-login-node', 'sbatch-from-tmp'])
+    expect(checkBash("bash <<'EOF'\necho 'unclosed\nEOF\ntorchrun --nproc-per-node=2 t.py", ctx).map(f => f.rule)).toContain('gpu-work-on-login-node')
     // A Python body is not shell: its quotes hide nothing after it.
     expect(checkBash("python3 - <<'PY'\nprint(\"it's\")\nx = 'a\nPY\ntorchrun --nproc-per-node=2 t.py", ctx).map(f => f.rule)).toContain('gpu-work-on-login-node')
     // One fed to ssh runs on that host, and one written to a file is text.

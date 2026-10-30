@@ -32,19 +32,31 @@ export type GuardContext = {
  * a quote that swallows every command after it, `sbatch` included.
  */
 export function stripHeredocs(command: string): string {
+  return heredocParts(command)[0]!
+}
+
+/**
+ * The command with its heredoc bodies taken out, then the body of each heredoc
+ * fed to a local shell, as separate commands, each split the same way (to a
+ * few levels). A shell body is run here, so it is checked, but on its own: its
+ * quotes and nested heredocs stay inside it and cannot hide the outer command.
+ */
+export function heredocParts(command: string, depth = 0): string[] {
   const out: string[] = []
+  const shellBodies: string[] = []
   let body: string[] = []
+  let all: string[] = []
   const pending: { word: string; tabs: boolean; runs: boolean }[] = []
   for (const line of command.split('\n')) {
     if (pending.length) {
-      // A body fed to a local shell or interpreter is commands run here: keep it.
-      if (pending[0]!.runs) out.push(line)
-      else body.push(line)
       const d = pending[0]!
+      all.push(line)
       if ((d.tabs ? line.replace(/^\t+/, '') : line) === d.word) {
+        if (d.runs) shellBodies.push(body.join('\n'))
         pending.shift()
-        if (!pending.length) body = []
-      }
+        body = []
+        if (!pending.length) all = []
+      } else body.push(line)
       continue
     }
     out.push(line)
@@ -56,7 +68,9 @@ export function stripHeredocs(command: string): string {
     }
   }
   // No terminator: not a heredoc after all, so nothing is hidden (fail closed).
-  return [...out, ...body].join('\n')
+  const outer = [...out, ...all].join('\n')
+  if (depth >= 3) return [outer, ...shellBodies]
+  return [outer, ...shellBodies.flatMap(b => heredocParts(b, depth + 1))]
 }
 
 // Shells that run a heredoc fed to them as commands on this host. Another language's body
@@ -99,7 +113,7 @@ function isLiteralCode(before: string): boolean {
  * command, so a heredoc misread can never hide a command from them.
  */
 export function segments(command: string, skipHeredocs = false): string[][] {
-  if (skipHeredocs) command = stripHeredocs(command)
+  if (skipHeredocs) return heredocParts(command).flatMap(part => segments(part))
   const out: string[][] = []
   let words: string[] = []
   let word = ''
@@ -240,14 +254,19 @@ const HEAVY = /^(torchrun|deepspeed|accelerate|vllm|sglang|python[\d.]*)$/
 const SCRATCH_DIRS = /^\/(tmp|var\/tmp|dev\/shm)(\/|$)/
 
 /**
- * Findings for the command with its heredoc bodies skipped: a body is a file's
- * text (`cat > job.sbatch <<EOF … torchrun … EOF`), not commands run here, and
+ * Findings for the command with its heredoc bodies taken out, and for each body
+ * fed to a local shell (`bash <<EOF`), which runs here, checked as a command of
+ * its own. Any other body is a file's text (`cat > job.sbatch <<EOF … EOF`), and
  * a quote inside one would otherwise hide every line after it. Stripping fails
  * closed: a `<<` in quotes, a comment or arithmetic is not a heredoc, and one
  * whose terminator never comes keeps its lines.
  */
 export function checkBash(command: string, ctx: GuardContext): Finding[] {
-  return checkSegments(segments(command, true), ctx)
+  // Each shell body is its own command: nothing in one wraps or excuses a line in another.
+  const seen = new Set<string>()
+  return heredocParts(command)
+    .flatMap(part => checkSegments(segments(part), ctx))
+    .filter(f => (seen.has(`${f.rule}\n${f.message}`) ? false : (seen.add(`${f.rule}\n${f.message}`), true)))
 }
 
 function checkSegments(segs: string[][], ctx: GuardContext): Finding[] {
