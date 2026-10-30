@@ -100,6 +100,15 @@ describe('submission detection', () => {
     expect(checkBash('echo "x << EOF"\ntorchrun --nproc-per-node=2 t.py', ctx).map(f => f.rule)).toContain('gpu-work-on-login-node')
     // Writing a script and submitting it is the common case: its body is text, never a command here.
     expect(checkBash("cat > job.sbatch <<'EOF'\n#!/bin/bash\ncd /tmp\ntorchrun --nproc-per-node=2 train.py\nEOF\nsbatch job.sbatch", ctx)).toEqual([])
+    // A heredoc fed to a local shell or interpreter runs here, so its body is checked.
+    expect(checkBash('bash <<EOF\ntorchrun --nproc-per-node=2 t.py\nEOF', ctx).map(f => f.rule)).toContain('gpu-work-on-login-node')
+    expect(checkBash("cd /p && python3 - <<'PY'\nimport os\nPY\nbash -s <<'EOF'\ncd /tmp\nsbatch j.sh\nEOF", ctx).map(f => f.rule)).toEqual(['sbatch-from-tmp'])
+    expect(checkBash('sudo env bash <<EOF\ntorchrun --nproc-per-node=2 t.py\nEOF', ctx).map(f => f.rule)).toContain('gpu-work-on-login-node')
+    // A Python body is not shell: its quotes hide nothing after it.
+    expect(checkBash("python3 - <<'PY'\nprint(\"it's\")\nx = 'a\nPY\ntorchrun --nproc-per-node=2 t.py", ctx).map(f => f.rule)).toContain('gpu-work-on-login-node')
+    // One fed to ssh runs on that host, and one written to a file is text.
+    // One fed to ssh runs on that host, and one written to a file is text.
+    expect(checkBash('ssh sprc02 <<EOF\ntorchrun --nproc-per-node=2 t.py\nEOF', { ...ctx, allocatedNodes: new Set(['sprc02']) })).toEqual([])
     // A quote inside a heredoc body cannot hide a launcher after it either.
     expect(checkBash("cat > n.txt <<'EOF'\nit's\nEOF\ntorchrun --nproc-per-node=2 t.py", ctx).map(f => f.rule)).toContain('gpu-work-on-login-node')
     expect(checkBash("cat > n.txt <<'EOF'\nit's\nEOF\ncd /tmp && sbatch job.sh", ctx).map(f => f.rule)).toEqual(['sbatch-from-tmp'])

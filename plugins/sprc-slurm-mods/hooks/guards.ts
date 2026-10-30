@@ -34,10 +34,12 @@ export type GuardContext = {
 export function stripHeredocs(command: string): string {
   const out: string[] = []
   let body: string[] = []
-  const pending: { word: string; tabs: boolean }[] = []
+  const pending: { word: string; tabs: boolean; runs: boolean }[] = []
   for (const line of command.split('\n')) {
     if (pending.length) {
-      body.push(line)
+      // A body fed to a local shell or interpreter is commands run here: keep it.
+      if (pending[0]!.runs) out.push(line)
+      else body.push(line)
       const d = pending[0]!
       if ((d.tabs ? line.replace(/^\t+/, '') : line) === d.word) {
         pending.shift()
@@ -48,12 +50,26 @@ export function stripHeredocs(command: string): string {
     out.push(line)
     // <<EOF, <<-EOF, <<'EOF', <<"EOF" and <<\EOF.
     for (const m of line.matchAll(/(?<!<)<<(-?)\s*\\?(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g)) {
-      if (!isLiteralCode(line.slice(0, m.index))) continue
-      pending.push({ word: m[3]!, tabs: m[1] === '-' })
+      const before = line.slice(0, m.index)
+      if (!isLiteralCode(before)) continue
+      pending.push({ word: m[3]!, tabs: m[1] === '-', runs: runsHere(before) })
     }
   }
   // No terminator: not a heredoc after all, so nothing is hidden (fail closed).
   return [...out, ...body].join('\n')
+}
+
+// Shells that run a heredoc fed to them as commands on this host. Another language's body
+// (python, perl) is not shell and cannot be read as commands; srun and ssh run elsewhere.
+const SHELLS = /^(bash|sh|zsh|dash|ksh|eval|source|\.)$/
+const WRAPPERS = /^(env|time|nohup|sudo|exec|command|-[A-Za-z-]+)$/
+
+/** Whether the command a `<<` belongs to (the last simple command before it) is a shell run here. */
+function runsHere(before: string): boolean {
+  const seg = before.split(/\|\||&&|[;|&(]/).pop() ?? ''
+  const words = seg.trim().split(/\s+/).filter(w => w && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w))
+  const cmd = words.map(w => w.split('/').pop() ?? '').find(w => !WRAPPERS.test(w)) ?? ''
+  return SHELLS.test(cmd)
 }
 
 /** Whether text ending here is outside quotes, a comment and `$(( ))`, so a `<<` that follows is a heredoc. */
