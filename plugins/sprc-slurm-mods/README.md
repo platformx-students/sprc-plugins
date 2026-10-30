@@ -8,11 +8,11 @@ optional extra on top of it.
 
 | You get | What it is |
 |---|---|
-| Auto-follow | Every `sbatch` the agent runs is followed, including loops, job arrays and `JID=$(sbatch --parsable …)`. Jobs submitted by one agent in one turn form a group. |
+| Auto-follow | Every job the agent submits is followed: `sbatch` anywhere in a command (loops, arrays, after a heredoc, `JID=$(sbatch --parsable …)`), a script it runs that calls `sbatch` (`sh submit.sh`, `./launch`, `python sweep.py`), any command that prints `Submitted batch job N` for a job submitted while it ran, and background commands, whose jobs are picked up from the queue by job or script name for two hours. Jobs submitted by one agent in one turn form a group. So the agent never needs to wait: there is no blocking tool. |
 | One message per group | When every job in a group has ended, the agent gets one short message: state counts, the failures with exit codes and log paths, and right-sizing advice it hasn't already seen. If the conversation is idle, this starts a turn (setting `wake`). If it is busy, the message rides on its next tool result. Subagents and teammates get their own jobs' results. |
 | Toasts | `▶` when a followed job starts, `✓`/`✗` when followed jobs end, combined into one toast per poll. |
 | Status line | `sprc ▸ 4/8 GPU free · following 21 (3R 18PD) · queue 71` |
-| Job tools for the model | `sprc_status`, `sprc_job` (log tail, efficiency, array summary), `sprc_wait` (blocks up to 9 min on several jobs), `sprc_follow` (for jobs submitted elsewhere) |
+| Job tools for the model | `sprc_status`, `sprc_job` (log tail, efficiency, array summary), `sprc_follow` (for jobs submitted elsewhere, such as by you in another terminal) |
 | Guardrails | Blocks only commands that would fail silently or load the login node, and that Slurm doesn't refuse itself: `sbatch` whose working directory is node-local `/tmp` (the script's own `#SBATCH --chdir` counts), and GPU launchers (`torchrun`, `vllm serve`, …) on sprlab005. Notes on `ssh` to a node you have no job on, and on `sacct --json`, are shown once per session and never block. |
 | Live context | A one-line cluster summary on prompts that mention Slurm, GPUs or the cluster. It is sent again only when the summary changes. |
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { checkBash, runsSbatch, sbatchScript, sbatchScripts, segments, submittedJobs } from '../hooks/guards'
+import { checkBash, runsSbatch, sbatchScript, sbatchScripts, scriptsRun, segments, stripHeredocs, submittedJobs } from '../hooks/guards'
 import type { GuardContext } from '../hooks/guards'
 import {
   buildReport,
@@ -79,6 +79,27 @@ describe('guards', () => {
     expect(submittedJobs('82335\n', true)).toEqual(['82335'])
     expect(submittedJobs('82335;sprc\n', true)).toEqual(['82335'])
     expect(submittedJobs('82335\n')).toEqual([])
+  })
+})
+
+describe('submission detection', () => {
+  test('heredoc bodies are skipped, so a stray quote in one hides nothing after it', () => {
+    const cmd = "cat > notes.txt <<'EOF'\nit's an unbalanced quote\nEOF\ncd /p && sbatch job.sh"
+    expect(stripHeredocs(cmd)).toBe("cat > notes.txt <<'EOF'\ncd /p && sbatch job.sh")
+    expect(runsSbatch(cmd)).toBe(true)
+    expect(runsSbatch('cat > a.sbatch <<EOF\n#!/bin/bash\necho hi\nEOF\nsbatch a.sbatch')).toBe(true)
+    expect(stripHeredocs('x <<-END\n\tbody\n\tEND\ny')).toBe('x <<-END\ny')
+    expect(stripHeredocs('cat <<<"$v"; sbatch a')).toBe('cat <<<"$v"; sbatch a')
+  })
+  test('sbatch fed its script on stdin is still a submission', () => {
+    expect(runsSbatch('sbatch <<EOF\n#!/bin/bash\n#SBATCH -t 1\nsrun hostname\nEOF')).toBe(true)
+  })
+  test('scripts a command runs', () => {
+    expect(scriptsRun('JOB=x sh e2e/submit.sh --go', '/h/p')).toEqual(['/h/p/e2e/submit.sh'])
+    expect(scriptsRun('cd /w && ./launch.sh; python3 sweep.py --n 3', '/h')).toEqual(['/w/launch.sh', '/w/sweep.py'])
+    expect(scriptsRun("python3 - <<'EOF'\nprint(1)\nEOF", '/h')).toEqual([])
+    expect(scriptsRun('bash -c "sbatch x"', '/h')).toEqual([])
+    expect(scriptsRun('ls -la && git status', '/h')).toEqual([])
   })
 })
 

@@ -23,8 +23,32 @@ export type GuardContext = {
   scripts?: ReadonlyMap<string, string>
 }
 
-/** Splits a command line into simple commands on ;, &&, ||, |, newlines. Quote-aware. */
+/**
+ * The command line without its heredoc bodies: `<<EOF` (or `<<-EOF`, `<<'EOF'`,
+ * `<<"EOF"`) keeps its own line and drops every line up to the delimiter.
+ * A body is data, and an apostrophe or `"""` inside one would otherwise open
+ * a quote that swallows every command after it, `sbatch` included.
+ */
+export function stripHeredocs(command: string): string {
+  const out: string[] = []
+  const pending: { word: string; tabs: boolean }[] = []
+  for (const line of command.split('\n')) {
+    if (pending.length) {
+      const d = pending[0]!
+      if ((d.tabs ? line.replace(/^\t+/, '') : line) === d.word) pending.shift()
+      continue
+    }
+    out.push(line)
+    for (const m of line.matchAll(/(?<!<)<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g)) {
+      pending.push({ word: m[3]!, tabs: m[1] === '-' })
+    }
+  }
+  return out.join('\n')
+}
+
+/** Splits a command line into simple commands on ;, &&, ||, |, newlines. Quote-aware; heredoc bodies are skipped. */
 export function segments(command: string): string[][] {
+  command = stripHeredocs(command)
   const out: string[][] = []
   let words: string[] = []
   let word = ''
@@ -221,6 +245,33 @@ export function sbatchScripts(command: string, cwd: string): { script: string; p
     out.push({ script, path: script.startsWith('/') ? script : cwd && !/^[~$]/.test(script) ? `${cwd}/${script}` : '' })
   }
   return out
+}
+
+/**
+ * The scripts a command line runs, each with the path to read it at: `bash x.sh`,
+ * `sh`/`zsh`/`source`/`.`, `./x.sh` or any path run as a command, and
+ * `python x.py`. A wrapper like these may call sbatch itself.
+ */
+export function scriptsRun(command: string, cwd: string): string[] {
+  const out: string[] = []
+  const at = (p: string) => (p.startsWith('/') ? p : cwd && !/^[~$]/.test(p) ? `${cwd}/${p.replace(/^(\.\/)+/, '')}` : '')
+  for (const seg of segments(command)) {
+    const words = head(seg)
+    const cmd = base(words[0])
+    if (cmd === 'cd' || cmd === 'pushd') cwd = words[1]?.startsWith('/') ? words[1] : ''
+    let script: string | undefined
+    if (/^(bash|sh|zsh|source|\.)$/.test(cmd) || /^python[\d.]*$/.test(cmd)) {
+      if (words.some(w => w === '-c' || w === '-m' || w === '-')) continue
+      script = words.slice(1).find(w => !w.startsWith('-'))
+    } else if (words[0]?.includes('/')) {
+      script = words[0]
+    }
+    if (script) {
+      const path = at(script)
+      if (path) out.push(path)
+    }
+  }
+  return [...new Set(out)]
 }
 
 /** Whether a command line runs sbatch (also inside `$( )`, a loop or a pipeline). */

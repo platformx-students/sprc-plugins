@@ -1,6 +1,6 @@
 {
   "name": "sprc-slurm-mods",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Claude Code mod for the sprc Slurm cluster: follows the jobs you submit and tells the agent once when they end (results, failures, right-sizing), job tools, a status line, and submit guardrails.",
   "author": {
     "name": "Max Bromberg"
